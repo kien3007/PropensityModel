@@ -1,0 +1,6 @@
+severity,area,issue,action
+high,business_semantics,Propensity is not incremental response to a campaign.,Use randomized treatment/control data before optimizing coupon uplift.
+medium,demographics,Demographics cover only 32.0% of transaction households.,Retain Unknown explicitly and report segment metrics only with adequate support.
+medium,time,DAY is an integer index without a calendar-date mapping.,Avoid claims about real-world seasonality; validate calendar mapping if available.
+high,quantity_semantics,QUANTITY uses a scaled convention for fuel and miscellaneous sales; it is not a comparable count of physical items.,"Exclude raw QUANTITY from propensity V2; use baskets, lines and diversity."
+medium,causal_data,Causal media data is product-store-week level and very large.,Join only point-in-time media exposure aggregates needed by a defined use case.

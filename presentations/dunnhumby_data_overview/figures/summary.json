@@ -1,0 +1,17 @@
+{
+  "transactions": 2595732,
+  "households": 2500,
+  "baskets": 276484,
+  "household_days": 225533,
+  "multi_basket_household_days": 39179,
+  "basket_zero_sales": 942,
+  "basket_positive_sales": 275542,
+  "baskets_day_278": 1,
+  "baskets_day_643": 1,
+  "quantity_gt100_rows": 23136,
+  "first_day_median": 69.0,
+  "baskets_per_household_mean": 110.5936,
+  "baskets_per_household_median": 79.0,
+  "lines_per_basket_median": 5.0,
+  "product_match_rate": 1.0
+}

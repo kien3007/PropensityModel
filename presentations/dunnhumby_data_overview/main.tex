@@ -1,0 +1,546 @@
+% Dunnhumby data understanding and preparation, adapted from:
+% https://github.com/deepmancer/latex-presentation-template (MIT, 2024 Alireza Heidari).
+% Compile in this directory: xelatex -interaction=nonstopmode -halt-on-error main.tex
+% Compile twice to update the slide counter. Set Overleaf compiler to XeLaTeX.
+\documentclass[smaller,aspectratio=169,t]{beamer}
+\usepackage{fontspec}
+\IfFontExistsTF{Noto Sans}{\setsansfont{Noto Sans}}{%
+  \IfFontExistsTF{Arial}{\setsansfont{Arial}}{\setsansfont{TeX Gyre Heros}}}
+\usepackage{tabularx,array,graphicx,tikz}
+\IfFileExists{booktabs.sty}{\usepackage{booktabs}}{%
+  \newcommand{\toprule}{\hline}
+  \newcommand{\midrule}{\hline}
+  \newcommand{\bottomrule}{\hline}}
+\usetikzlibrary{arrows.meta,positioning}
+\definecolor{myBlue}{RGB}{0,33,71}
+\definecolor{accent}{HTML}{008B8B}
+\definecolor{pale}{HTML}{EEF4F7}
+\definecolor{muted}{HTML}{5D6D7E}
+\useoutertheme{infolines}
+\usecolortheme[named=myBlue]{structure}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{headline}{}
+\setbeamersize{text margin left=10mm,text margin right=10mm}
+\setbeamercolor{normal text}{fg=myBlue,bg=white}
+\setbeamercolor{frametitle}{fg=myBlue,bg=white}
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamercolor{block title}{fg=white,bg=myBlue}
+\setbeamercolor{block body}{fg=myBlue,bg=pale}
+\setbeamertemplate{frametitle}{%
+  \nointerlineskip
+  \begin{beamercolorbox}[wd=\paperwidth,leftskip=10mm,rightskip=10mm,
+    ht=8mm,dp=2mm]{frametitle}%
+    \usebeamerfont{frametitle}\insertframetitle
+  \end{beamercolorbox}%
+  \nointerlineskip\hbox to \paperwidth{\hspace{10mm}%
+    \color{myBlue}\rule{\dimexpr\paperwidth-20mm\relax}{.35pt}\hfil}%
+  \vspace{1mm}}
+\setbeamertemplate{footline}{%
+  \leavevmode\hbox{%
+    \begin{beamercolorbox}[wd=.64\paperwidth,ht=3.2mm,dp=1.6mm,leftskip=10mm]{footline}%
+      \tiny\color{muted}Dunnhumby | Data Understanding \& Preparation
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.25\paperwidth,ht=3.2mm,dp=1.6mm,center]{footline}%
+      \tiny\color{muted}[Tên người trình bày]
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.11\paperwidth,ht=3.2mm,dp=1.6mm,center]{footline}%
+      \tiny\color{muted}\insertframenumber/\inserttotalframenumber
+    \end{beamercolorbox}}\vspace{1mm}}
+\setbeamertemplate{itemize item}{\color{accent}$\blacktriangleright$}
+\newcommand{\src}[1]{\vspace{1mm}{\tiny\color{muted}Nguồn: #1}}
+\newcommand{\fig}[2]{\includegraphics[width=#1,height=.41\textheight,keepaspectratio]{figures/#2.pdf}}
+\newcommand{\largefig}[1]{\includegraphics[width=.96\linewidth,height=.58\textheight,keepaspectratio]{figures/#1.pdf}}
+\newcommand{\kpi}[2]{\begin{minipage}{.235\textwidth}\centering
+  {\LARGE\bfseries\color{myBlue}#1}\\[2mm]{\small #2}\end{minipage}}
+\title{Tổng quan và chuẩn bị dữ liệu Dunnhumby}
+\subtitle{Khảo sát chất lượng và trực quan hóa dữ liệu bán lẻ}
+\author{[Tên người trình bày]}
+\date{[Ngày báo cáo]}
+
+\begin{document}
+
+% 01
+\begin{frame}[plain]
+\begin{tikzpicture}[remember picture,overlay]
+  \fill[myBlue] (current page.south west) rectangle (current page.north east);
+  \fill[accent] ([yshift=14mm]current page.south west) rectangle
+    ([yshift=16mm]current page.south east);
+  \fill[white,opacity=.05] ([xshift=-50mm]current page.north east) --
+    (current page.north east) -- ([yshift=35mm]current page.south east) -- cycle;
+\end{tikzpicture}
+\vspace{6mm}
+{\color{white}\LARGE\bfseries TỔNG QUAN VÀ CHUẨN BỊ\\[2mm]
+DỮ LIỆU DUNNHUMBY}\par
+\vspace{6mm}{\color{white}\large Khảo sát chất lượng và trực quan hóa dữ liệu bán lẻ}\par
+\vspace{12mm}{\color{white}[Tên người trình bày] \quad | \quad [Ngày báo cáo]}
+\end{frame}
+
+% 02
+\begin{frame}{Mục tiêu và phạm vi nghiên cứu}
+\begin{columns}[T,onlytextwidth]
+\column{.49\textwidth}
+\begin{block}{Câu hỏi cần trả lời}
+\begin{itemize}
+\item Bộ dữ liệu có những bảng nào, liên kết với nhau ra sao?
+\item Mỗi dòng, mỗi giỏ hàng và mỗi hộ đại diện cho điều gì?
+\item Những vấn đề chất lượng nào cần xử lý trước phân tích?
+\item Hành vi mua hàng thay đổi như thế nào theo thời gian và nhóm sản phẩm?
+\end{itemize}
+\end{block}
+\column{.47\textwidth}
+\textbf{Lộ trình}\vspace{3mm}
+\begin{enumerate}
+\item Tổng quan dữ liệu và grain
+\item Quy trình data preparation
+\item Các phát hiện từ visualization
+\item Giới hạn và việc cần xác nhận
+\end{enumerate}
+\vspace{4mm}
+{\small Bài toán propensity là bối cảnh sử dụng; báo cáo này tập trung vào dữ liệu.}
+\end{columns}
+\end{frame}
+
+% 03
+\begin{frame}{Tổng quan quy mô bộ dữ liệu}
+\vspace{4mm}
+\kpi{2.500}{household}
+\kpi{276.484}{basket ID}
+\kpi{2.595.732}{dòng giao dịch}
+\kpi{711}{chỉ số ngày}
+\vspace{9mm}
+\begin{block}{Bối cảnh}
+Nhóm household mua sắm thường xuyên tại một retailer, với lịch sử mua khoảng hai năm.
+File local còn có product, demographic, campaign, coupon và thông tin trưng bày/gửi mail.
+\end{block}
+\src{Audit local; \href{https://www.dunnhumby.com/source-files/}{dunnhumby Source Files --- The Complete Journey}.}
+\end{frame}
+
+% 04
+\begin{frame}{Danh mục tám bảng dữ liệu}
+\small\renewcommand{\arraystretch}{1.08}
+\begin{tabularx}{\textwidth}{>{\ttfamily}l r X}
+\toprule Bảng & Số dòng & Nội dung / grain \\
+\midrule
+transaction\_data & 2.595.732 & Dòng sản phẩm trong basket của household \\
+product & 92.353 & Danh mục sản phẩm, department và brand \\
+hh\_demographic & 801 & Thuộc tính household được cung cấp \\
+campaign\_table & 7.208 & Household gắn với campaign \\
+campaign\_desc & 30 & Mô tả và khoảng ngày của campaign \\
+coupon & 124.548 & Ánh xạ coupon -- sản phẩm -- campaign \\
+coupon\_redempt & 2.318 & Sự kiện household sử dụng coupon \\
+causal\_data & 36.786.524 & Display/mailer theo product -- store -- week \\
+\bottomrule
+\end{tabularx}
+\src{\texttt{dataset\_inventory.csv}; causal\_data là tên bảng, không tự chứng minh quan hệ nhân quả.}
+\end{frame}
+
+% 05
+\begin{frame}{Đơn vị quan sát và cấp độ dữ liệu}
+\begin{center}
+\begin{tikzpicture}[node distance=9mm,
+  box/.style={draw=myBlue,rounded corners,minimum height=10mm,text width=33mm,align=center,fill=pale},
+  arrow/.style={-{Latex},thick,color=accent}]
+\node[box] (h) {1 household};
+\node[box,right=of h] (b) {N basket};
+\node[box,right=of b] (l) {N dòng sản phẩm};
+\draw[arrow] (h)--(b); \draw[arrow] (b)--(l);
+\end{tikzpicture}
+\end{center}
+\vspace{8mm}
+\begin{columns}[T,onlytextwidth]
+\column{.48\textwidth}
+\textbf{Ví dụ cấu trúc}\vspace{1mm}
+\begin{tabular}{rrr}\toprule household & basket & product \\
+1 & A & sữa \\ 1 & A & bánh \\ 1 & B & gạo \\
+\bottomrule\end{tabular}
+\column{.48\textwidth}
+\begin{itemize}
+\item 3 dòng sản phẩm, 2 basket, 1 household.
+\item Đếm basket bằng số \texttt{BASKET\_ID} phân biệt.
+\item Một hộ có thể có nhiều basket trong một ngày.
+\end{itemize}
+\end{columns}
+\end{frame}
+
+% 06
+\begin{frame}{Cấu trúc liên kết giữa các bảng dữ liệu}
+\centering
+\begin{tikzpicture}[scale=.78,transform shape,node distance=8mm,
+  box/.style={draw=myBlue,rounded corners,minimum height=9mm,text width=30mm,align=center,fill=pale,font=\small},
+  arrow/.style={-{Latex},thick,color=accent}]
+\node[box,fill=myBlue,text=white] (tx) {Transactions};
+\node[box,left=15mm of tx] (hh) {Household};
+\node[box,right=15mm of tx] (pr) {Product};
+\node[box,above=9mm of hh] (demo) {Demographic};
+\node[box,below=9mm of hh] (camp) {Campaign};
+\node[box,below=9mm of pr] (coup) {Coupon / redemption};
+\node[box,above=9mm of pr] (med) {Display / mailer};
+\draw[arrow] (hh)--node[above,font=\tiny]{household\_key}(tx);
+\draw[arrow] (pr)--node[above,font=\tiny]{PRODUCT\_ID}(tx);
+\draw[arrow] (demo)--(hh); \draw[arrow] (camp)--(hh);
+\draw[arrow] (coup)--(pr); \draw[arrow] (med)--(pr);
+\end{tikzpicture}
+\vspace{3mm}
+\begin{block}{Hàm ý đối với kết nối dữ liệu}
+Coupon tạo quan hệ nhiều-nhiều; display/mailer có cấp độ product--store--week.
+Quá trình kết nối cần bảo toàn cấp độ quan sát và kiểm tra số dòng sau join.
+\end{block}
+\end{frame}
+
+% 07
+\begin{frame}{Quy trình chuẩn bị dữ liệu}
+\begin{enumerate}
+\item \textbf{Inventory:} số dòng, cột, kiểu dữ liệu, kích thước và grain.
+\item \textbf{Schema:} chọn cột, xác định kiểu ID, ngày, số tiền; giữ nguyên dữ liệu nguồn.
+\item \textbf{Quality:} kiểm tra null, duplicate, giá trị bất thường và tính nhất quán basket.
+\item \textbf{Joins:} kiểm tra uniqueness, orphan keys và tỷ lệ match trước khi nối.
+\item \textbf{Aggregation:} transaction line $\rightarrow$ basket $\rightarrow$ household-day.
+\item \textbf{Visualization:} mô tả thời gian, số lượt mua, sản phẩm và độ phủ.
+\end{enumerate}
+\vspace{3mm}\begin{block}{Kết quả đầu ra}Các bảng thống kê có đơn vị quan sát, khóa liên kết và mẫu số được xác định rõ.\end{block}
+\end{frame}
+
+% 08
+\begin{frame}{Kiểm tra dữ liệu thiếu và độ bao phủ}
+\begin{center}\largefig{household_coverage}\end{center}
+\vspace{-2mm}
+\begin{itemize}\small
+\item \textbf{Kết quả:} transaction không có ô null; 801 / 2.500 hộ có demographic.
+\item \textbf{Hàm ý:} dùng left join để giữ các hộ không có thông tin nhân khẩu học.
+\end{itemize}
+\src{Audit local; mẫu số là 2.500 household có giao dịch.}
+\end{frame}
+
+% 09
+\begin{frame}{Kiểm tra dữ liệu trùng lặp}
+\begin{columns}[T,onlytextwidth]
+\column{.50\textwidth}
+\begin{block}{Phát hiện}
+\begin{itemize}
+\item Transaction: 0 dòng trùng hoàn toàn trên 12 cột nguồn.
+\item Product: \texttt{PRODUCT\_ID} duy nhất trong catalog.
+\item Coupon: 5.164 dòng trùng hoàn toàn trên 3 cột.
+\end{itemize}
+\end{block}
+\column{.47\textwidth}
+\textbf{Hàm ý xử lý}\vspace{2mm}
+\begin{itemize}
+\item Giữ dữ liệu gốc và ghi nhận số dòng trùng trong báo cáo chất lượng.
+\item Đánh giá 5.164 dòng coupon theo cấp độ mapping trước khi loại trùng.
+\item Xác định trùng lặp trên đúng đơn vị quan sát của từng bảng.
+\end{itemize}
+\end{columns}
+\end{frame}
+
+% 10
+\begin{frame}{Kiểm tra tính toàn vẹn trước khi kết nối dữ liệu}
+\small\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\textwidth}{Xrl}
+\toprule Kiểm tra & Kết quả & Diễn giải \\
+\midrule
+Transaction product khớp catalog & 100\% & Join product many-to-one \\
+Basket thuộc nhiều household & 0 & Một ID không bị chia sẻ giữa hộ \\
+Basket thuộc nhiều ngày & 0 & Ngày nhất quán theo basket \\
+Redemption có campaign được biết & 100\% & Kiểm tra khóa campaign \\
+Redemption trong campaign window & 100\% & Kiểm tra ngày bắt đầu/kết thúc \\
+\bottomrule
+\end{tabularx}
+\vspace{4mm}
+\begin{block}{Hàm ý phân tích}
+Khóa sản phẩm trong catalog duy nhất và match toàn bộ transaction;
+quan hệ này cho phép kết nối nhiều-một, đồng thời đối chiếu số dòng trước/sau join.
+\end{block}
+\src{Audit local; kiểm tra khóa và khoảng ngày trên các bảng được cung cấp.}
+\end{frame}
+
+% 11
+\begin{frame}{Phân bố QUANTITY và vấn đề đơn vị đo}
+\begin{center}\largefig{quantity_semantics}\end{center}
+\vspace{-2mm}
+\begin{itemize}\small
+\item \textbf{Kết quả:} 23.136 dòng có \texttt{QUANTITY > 100}, tập trung ở fuel/misc.
+\item \textbf{Diễn giải:} user guide mô tả lượng mua, nhưng không nêu đơn vị riêng cho fuel; chưa tổng hợp xuyên nhóm.
+\end{itemize}
+\src{Audit transaction--product; The Complete Journey User Guide, trang 3.}
+\end{frame}
+
+% 12
+\begin{frame}{Kiểm tra giỏ hàng có doanh số bằng không}
+\begin{columns}[T,onlytextwidth]
+\column{.48\textwidth}
+{\LARGE\bfseries 942}\\[1mm]basket có tổng sales = 0\vspace{4mm}
+\begin{itemize}
+\item 275.542 basket có tổng sales dương.
+\item 18.850 transaction lines có sales bằng 0.
+\item Một dòng 0 đồng không mặc nhiên là lỗi: có thể phản ánh khuyến mãi hoặc quy ước ghi nhận.
+\end{itemize}
+\column{.48\textwidth}
+\begin{block}{Hàm ý đối với định nghĩa mua hàng}
+Số giỏ được xác định phụ thuộc vào quy tắc đưa basket zero-sales, fuel và miscellaneous vào phạm vi phân tích.
+\end{block}
+\vspace{2mm}
+\textbf{Phạm vi hiện tại:} thống kê mô tả bao gồm toàn bộ basket được ghi nhận.
+\end{columns}
+\end{frame}
+
+% 13
+\begin{frame}{Phân bố số giỏ hàng theo ngày}
+\begin{center}\largefig{daily_baskets}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item \textbf{Kết quả:} hoạt động tăng ở giai đoạn đầu; ngày 278 và 643 chỉ có 1 basket/ngày.
+\item \textbf{Diễn giải:} hai điểm giảm sâu có nguyên nhân chưa xác định; đường đậm là trung bình 14 ngày.
+\end{itemize}
+\src{Transaction data; DAY là chỉ số tương đối, không có ngày lịch được xác nhận.}
+\end{frame}
+
+% 14
+\begin{frame}{Phân bố thời điểm xuất hiện đầu tiên của hộ}
+\begin{center}\largefig{first_observed}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item \textbf{Kết quả:} trung vị ngày xuất hiện đầu tiên là \textbf{69}.
+\item \textbf{Diễn giải:} thời gian quan sát khác nhau giữa các hộ; ngày xuất hiện không nhất thiết là ngày gia nhập.
+\end{itemize}
+\end{frame}
+
+% 15
+\begin{frame}{Phân bố số giỏ hàng theo hộ gia đình}
+\begin{center}\largefig{basket_per_household}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item \textbf{Kết quả:} trung vị \textbf{79}, trung bình \textbf{110,6} basket / hộ.
+\item \textbf{Diễn giải:} phân bố lệch phải; 39.179 household-day có từ 2 basket trở lên.
+\end{itemize}
+\src{Giới hạn hiển thị: 600 basket/hộ; thống kê tính trên dữ liệu đầy đủ.}
+\end{frame}
+
+% 16
+\begin{frame}{Phân bố số dòng sản phẩm trong giỏ hàng}
+\begin{center}\largefig{lines_per_basket}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item \textbf{Kết quả:} trung vị \textbf{5 dòng}, trung bình \textbf{9,39 dòng} / basket.
+\item \textbf{Diễn giải:} một số basket lớn tạo đuôi phải; dòng sản phẩm và basket có cấp độ khác nhau.
+\end{itemize}
+\src{Giới hạn hiển thị: 60 dòng/basket; thống kê tính trên dữ liệu đầy đủ.}
+\end{frame}
+
+% 17
+\begin{frame}{Cơ cấu doanh số ghi nhận theo nhóm hàng}
+\begin{center}\largefig{department_sales}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item \textbf{Kết quả:} GROCERY chiếm \textbf{50,8\%}; DRUG GM 13,1\%; PRODUCE 6,9\%.
+\item \textbf{Diễn giải:} cơ cấu giao dịch bao gồm cả fuel và miscellaneous ngoài grocery.
+\end{itemize}
+\src{Tổng SALES\_VALUE retailer nhận được; hiển thị 8 department lớn nhất. User Guide, trang 3.}
+\end{frame}
+
+% 18
+\begin{frame}{Cơ cấu doanh số ghi nhận theo loại nhãn hàng}
+\begin{center}\largefig{brand_mix}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item \textbf{Kết quả:} National chiếm \textbf{72,2\%}; private chiếm \textbf{27,8\%}.
+\item \textbf{Diễn giải:} đây là cơ cấu SALES\_VALUE trong mẫu household được cung cấp.
+\end{itemize}
+\end{frame}
+
+% 19
+\begin{frame}{Dữ liệu chiến dịch, coupon và hoạt động truyền thông}
+\small
+\begin{tabularx}{\textwidth}{>{\bfseries}p{3cm}X X}
+\toprule Nguồn & Kết quả quan sát & Cấp độ thông tin \\
+\midrule
+Campaign & 63,36\% household có assignment & Household--campaign. \\
+Coupon / redemption & 2.318 redemption events & Household--coupon--ngày. \\
+Display / mailer & 36,79 triệu dòng & Product--store--week. \\
+Demographic & 801 household có thông tin & Household; không bao phủ toàn bộ mẫu. \\
+\bottomrule
+\end{tabularx}
+\vspace{4mm}\begin{block}{Hàm ý nghiên cứu}
+Các bảng bổ sung bối cảnh mua sắm ở nhiều cấp độ; dữ liệu quan sát hỗ trợ mô tả và xây dựng giả thuyết.
+\end{block}
+\end{frame}
+
+% 20
+\begin{frame}{Kết luận và các vấn đề cần xác minh}
+\begin{columns}[T,onlytextwidth]
+\column{.50\textwidth}
+\textbf{Kết quả chính}\vspace{2mm}
+\begin{itemize}
+\item Grain, khóa và quan hệ giữa 8 bảng.
+\item Transaction không thiếu giá trị; product match 100\%.
+\item Basket lặp theo household và thời gian.
+\item Có khác biệt rõ về department, brand và độ phủ bảng bổ trợ.
+\end{itemize}
+\column{.47\textwidth}
+\textbf{Giới hạn và hướng nghiên cứu}\vspace{2mm}
+\begin{itemize}
+\item Kiểm chứng định nghĩa giao dịch mua và đơn vị \texttt{QUANTITY}.
+\item Đối chiếu hai ngày có lượng giao dịch thấp với nguồn dữ liệu.
+\item Bổ sung thông tin ngày lịch và thời điểm ghi nhận demographic nếu có.
+\item Đánh giá giới hạn đại diện và phạm vi quan sát của mẫu.
+\end{itemize}
+\end{columns}
+\vspace{2mm}\src{Dữ liệu local: \texttt{sample\_data/dunnhumby}; audit: \texttt{artifacts/propensity\_v2/data\_understanding};
+\href{https://www.dunnhumby.com/source-files/}{mô tả nguồn chính thức}.}
+\end{frame}
+
+% Phụ lục: tên field và ví dụ được kiểm tra trên 8 CSV local.
+\appendix
+
+% 21
+\begin{frame}{Phụ lục A1: Giao dịch — khóa và thời gian}
+\small\renewcommand{\arraystretch}{1.18}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{3.3cm}X}
+\toprule Field & Định nghĩa và cách đọc \\
+\midrule
+household\_key & Mã định danh household có giao dịch. \\
+BASKET\_ID & Mã basket/giao dịch; nhiều dòng sản phẩm có thể cùng một basket. \\
+DAY & Chỉ số ngày tương đối trong dữ liệu; không phải ngày lịch đã xác nhận. \\
+PRODUCT\_ID & Mã sản phẩm trên dòng giao dịch; dùng nối với bảng product. \\
+STORE\_ID & Mã cửa hàng ghi nhận giao dịch. \\
+TRANS\_TIME & Giờ giao dịch dạng số HHMM; ví dụ 1631 là 16:31. \\
+WEEK\_NO & Chỉ số tuần của giao dịch; không tự suy diễn là tuần lịch. \\
+\bottomrule
+\end{tabularx}
+\vspace{2mm}\src{Grain: một dòng sản phẩm trong basket; audit local: 2.595.732 dòng.}
+\end{frame}
+
+% 22
+\begin{frame}{Phụ lục A2: Giao dịch — số lượng và giá trị}
+\small\renewcommand{\arraystretch}{1.12}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{4.0cm}X}
+\toprule Field & Định nghĩa và ý nghĩa phân tích \\
+\midrule
+QUANTITY & Lượng sản phẩm mua trong chuyến mua; đơn vị riêng của fuel chưa được nêu trong user guide. \\
+SALES\_VALUE & Số tiền retailer nhận được từ dòng sản phẩm; không nhất thiết bằng số tiền khách trả. \\
+RETAIL\_DISC & Giá trị điều chỉnh/chiết khấu bán lẻ; thường mang dấu âm trong dữ liệu. \\
+COUPON\_DISC & Giá trị điều chỉnh/chiết khấu coupon được ghi nhận trên dòng. \\
+COUPON\_MATCH\_DISC & Giá trị điều chỉnh coupon matching được ghi nhận trên dòng. \\
+\bottomrule
+\end{tabularx}
+\vspace{1mm}\begin{block}{Cơ sở định nghĩa}
+User guide phân biệt số tiền retailer nhận được và số tiền khách trả khi sử dụng manufacturer coupon.
+\end{block}
+\src{The Complete Journey User Guide, trang 3.}
+\end{frame}
+
+% 23
+\begin{frame}{Phụ lục B: Từ điển trường dữ liệu sản phẩm}
+\small\renewcommand{\arraystretch}{1.16}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{4.4cm}X}
+\toprule Field & Định nghĩa và cách đọc \\
+\midrule
+PRODUCT\_ID & Mã sản phẩm; khóa nối với transaction và coupon. \\
+MANUFACTURER & Mã nhà sản xuất được cung cấp trong catalog. \\
+DEPARTMENT & Nhóm hàng cấp department; ví dụ GROCERY, PRODUCE. \\
+BRAND & Phân loại nhãn hàng; trong dữ liệu có National và Private. \\
+COMMODITY\_DESC & Mô tả nhóm hàng ở cấp commodity. \\
+SUB\_COMMODITY\_DESC & Mô tả nhóm hàng chi tiết hơn dưới commodity. \\
+CURR\_SIZE\_OF\_PRODUCT & Mô tả quy cách/kích cỡ sản phẩm; ví dụ \texttt{22 LB}. \\
+\bottomrule
+\end{tabularx}
+\vspace{1mm}\src{92.353 dòng; PRODUCT\_ID không trùng trong catalog local.}
+\end{frame}
+
+% 24
+\begin{frame}{Phụ lục C: Từ điển trường dữ liệu nhân khẩu học}
+\scriptsize\renewcommand{\arraystretch}{1.15}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{4.2cm}X}
+\toprule Field & Nội dung nhìn thấy trong file local \\
+\midrule
+household\_key & Mã household; khóa nối với transaction. \\
+classification\_1 & Nhóm được mã hóa bằng nhãn \texttt{Age Group1}--\texttt{Age Group6}. \\
+classification\_2 & Nhóm phân loại mã hóa; các giá trị gồm \texttt{X}, \texttt{Y}, \texttt{Z}. \\
+classification\_3 & Nhóm phân loại mã hóa bằng các nhãn \texttt{Level}. \\
+classification\_4 & Nhóm phân loại mã hóa dạng số; ý nghĩa cần xác nhận. \\
+classification\_5 & Nhóm phân loại mã hóa bằng các nhãn \texttt{Group}. \\
+HOMEOWNER\_DESC & Nhãn mô tả tình trạng nhà ở/sở hữu nhà, có giá trị \texttt{Unknown}. \\
+KID\_CATEGORY\_DESC & Nhãn nhóm trẻ em trong hộ, gồm \texttt{None/Unknown}. \\
+\bottomrule
+\end{tabularx}
+\vspace{1mm}\src{801 household; không tự gán nghĩa cho các mã classification khi chưa có data dictionary.}
+\end{frame}
+
+% 25
+\begin{frame}{Phụ lục D: Từ điển trường phân bổ chiến dịch}
+\small\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
+\toprule Field & Định nghĩa và cách đọc \\
+\midrule
+DESCRIPTION & Nhãn loại campaign trong bảng, ví dụ \texttt{TypeA}. \\
+household\_key & Mã household được liên kết với campaign. \\
+CAMPAIGN & Mã campaign; nối với \texttt{campaign\_desc}. \\
+\bottomrule
+\end{tabularx}
+\vspace{5mm}\begin{block}{Đơn vị quan sát}
+Một dòng biểu diễn liên kết household--campaign. Có assignment không chứng minh hộ đã nhận, mở hoặc tương tác với thông điệp.
+\end{block}
+\end{frame}
+
+% 26
+\begin{frame}{Phụ lục E: Từ điển trường mô tả chiến dịch}
+\small\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
+\toprule Field & Định nghĩa và cách đọc \\
+\midrule
+DESCRIPTION & Nhãn loại campaign, ví dụ \texttt{TypeB}. \\
+CAMPAIGN & Mã campaign; nối với campaign assignment hoặc redemption. \\
+START\_DAY & Chỉ số ngày bắt đầu campaign theo dữ liệu nguồn. \\
+END\_DAY & Chỉ số ngày kết thúc campaign theo dữ liệu nguồn. \\
+\bottomrule
+\end{tabularx}
+\vspace{5mm}\begin{block}{Ý nghĩa phân tích}
+Hai chỉ số ngày xác định khoảng hoạt động của chiến dịch và hỗ trợ đối chiếu thời điểm redemption.
+\end{block}
+\end{frame}
+
+% 27
+\begin{frame}{Phụ lục F: Từ điển trường dữ liệu coupon}
+\small\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
+\toprule Field & Định nghĩa và cách đọc \\
+\midrule
+COUPON\_UPC & Mã coupon; nối với sự kiện trong \texttt{coupon\_redempt}. \\
+PRODUCT\_ID & Mã sản phẩm được liên kết với coupon. \\
+CAMPAIGN & Mã campaign gắn với mapping coupon--product. \\
+\bottomrule
+\end{tabularx}
+\vspace{5mm}\begin{block}{Đơn vị quan sát và kết quả kiểm tra}
+Bảng mô tả mapping coupon--product--campaign. Có 5.164 dòng trùng hoàn toàn trên ba cột.
+\end{block}
+\end{frame}
+
+% 28
+\begin{frame}{Phụ lục G: Từ điển trường sử dụng coupon}
+\small\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
+\toprule Field & Định nghĩa và cách đọc \\
+\midrule
+household\_key & Household có sự kiện redemption. \\
+DAY & Chỉ số ngày ghi nhận sự kiện sử dụng coupon. \\
+COUPON\_UPC & Mã coupon được sử dụng; nối với bảng coupon. \\
+CAMPAIGN & Mã campaign liên quan tới redemption. \\
+\bottomrule
+\end{tabularx}
+\vspace{5mm}\begin{block}{Đơn vị quan sát}
+Một dòng mô tả sự kiện sử dụng coupon của household trong một campaign, tại một ngày được ghi nhận.
+\end{block}
+\end{frame}
+
+% 29
+\begin{frame}{Phụ lục H: Từ điển trường trưng bày và mailer}
+\small\renewcommand{\arraystretch}{1.23}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
+\toprule Field & Định nghĩa và cách đọc \\
+\midrule
+PRODUCT\_ID & Mã sản phẩm trong bản ghi trưng bày/marketing. \\
+STORE\_ID & Mã cửa hàng của bản ghi. \\
+WEEK\_NO & Chỉ số tuần của bản ghi. \\
+display & Mã trưng bày tại cửa hàng; cần bảng giải mã từ nguồn. \\
+mailer & Mã mailer; cần bảng giải mã từ nguồn. \\
+\bottomrule
+\end{tabularx}
+\vspace{3mm}\begin{block}{Đơn vị quan sát}
+Bản ghi kết hợp sản phẩm, cửa hàng và tuần; các mã mô tả hình thức trưng bày và mailer.
+\end{block}
+\src{36.786.524 dòng local; diễn giải mã display/mailer cần tài liệu gốc.}
+\end{frame}
+\end{document}

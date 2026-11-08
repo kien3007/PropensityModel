@@ -1,0 +1,13 @@
+.deps/
+sample_data/dunnhumby/*.csv
+__pycache__/
+.ipynb_checkpoints/
+data/preparation_foundation/
+artifacts/propensity/propensity_model.joblib
+artifacts/propensity/modeling_table.parquet
+artifacts/propensity/modeling_table.csv.gz
+artifacts/propensity_v2/model/propensity_v2_model.joblib
+artifacts/propensity_v2/model/modeling_table_v2.parquet
+artifacts/propensity_v2/data_understanding/basket_summary.parquet
+__pycache__/
+.pytest_cache/
