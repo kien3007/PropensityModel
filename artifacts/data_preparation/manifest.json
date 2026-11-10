@@ -1,0 +1,62 @@
+{
+  "target": "target_any_basket",
+  "horizon_days": 7,
+  "history_windows_days": [
+    7,
+    30,
+    90,
+    180
+  ],
+  "features": [
+    "recency_days",
+    "observed_tenure_days",
+    "baskets_7d",
+    "sales_7d",
+    "line_items_7d",
+    "active_days_7d",
+    "baskets_30d",
+    "sales_30d",
+    "line_items_30d",
+    "active_days_30d",
+    "baskets_90d",
+    "sales_90d",
+    "line_items_90d",
+    "active_days_90d",
+    "baskets_180d",
+    "sales_180d",
+    "line_items_180d",
+    "active_days_180d"
+  ],
+  "metadata": [
+    "history_180d_touches_anomaly",
+    "history_90d_touches_anomaly",
+    "household_key",
+    "label_window_touches_anomaly",
+    "snapshot_day",
+    "split"
+  ],
+  "embargo_cutoffs": [
+    544,
+    628
+  ],
+  "split_boundaries": {
+    "train": [
+      180,
+      537
+    ],
+    "validation": [
+      551,
+      621
+    ],
+    "test": [
+      635,
+      698
+    ]
+  },
+  "test_previously_inspected": true,
+  "notes": [
+    "Demographic and marketing excluded: historical availability unverified.",
+    "QUANTITY excluded; anomalies retained.",
+    "Anomaly flags mark label, 90-day and 180-day history windows."
+  ]
+}

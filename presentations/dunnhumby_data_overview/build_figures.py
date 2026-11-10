@@ -1,7 +1,7 @@
 """Rebuild presentation charts from the supplied Dunnhumby CSV files.
 
 Run from the repository root: python presentations/dunnhumby_data_overview/build_figures.py
-The script only writes chart files and summary.json in the presentation's figures directory.
+The script writes PDF charts and summary.json in the presentation's figures directory.
 """
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 16,
 def save(name: str) -> None:
     plt.tight_layout()
     plt.savefig(OUT / f"{name}.pdf", bbox_inches="tight")
-    plt.savefig(OUT / f"{name}.png", bbox_inches="tight", dpi=160)
     plt.close()
 
 

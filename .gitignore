@@ -1,13 +1,36 @@
+# Local environments and secrets
 .deps/
-sample_data/dunnhumby/*.csv
+.venv/
+.env
+.env.*
+!.env.example
+*.egg-info/
+build/
+dist/
+
+# Raw data and generated local caches
+/sample_data/dunnhumby/
+/data/preparation_foundation/
 __pycache__/
+*.py[cod]
 .ipynb_checkpoints/
-data/preparation_foundation/
-artifacts/propensity/propensity_model.joblib
-artifacts/propensity/modeling_table.parquet
-artifacts/propensity/modeling_table.csv.gz
-artifacts/propensity_v2/model/propensity_v2_model.joblib
-artifacts/propensity_v2/model/modeling_table_v2.parquet
-artifacts/propensity_v2/data_understanding/basket_summary.parquet
-__pycache__/
 .pytest_cache/
+.ruff_cache/
+
+# Retired V1/V2 outputs; current POC artifacts remain reviewable
+/artifacts/propensity/
+/artifacts/propensity_v2/
+
+# LaTeX build products; keep source, final PDFs and PDF chart assets
+presentations/**/*.aux
+presentations/**/*.log
+presentations/**/*.nav
+presentations/**/*.out
+presentations/**/*.snm
+presentations/**/*.toc
+presentations/**/*.fls
+presentations/**/*.fdb_latexmk
+presentations/**/*.synctex.gz
+presentations/dunnhumby_data_overview/layout_check.*
+presentations/dunnhumby_data_overview/layout_preview/
+presentations/dunnhumby_data_overview/figures/*.png

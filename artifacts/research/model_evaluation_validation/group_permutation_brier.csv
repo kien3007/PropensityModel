@@ -1,0 +1,13 @@
+﻿model,feature_group,brier_increase
+Logistic Regression,Recency,0.010772278941287405
+Logistic Regression,Thời gian quan sát,8.224822755642514e-07
+Logistic Regression,baskets,0.013854077980555601
+Logistic Regression,sales,0.0003147243313303405
+Logistic Regression,line_items,0.006096278052026338
+Logistic Regression,active_days,0.1666035676078418
+LightGBM,Recency,0.00753352846070926
+LightGBM,Thời gian quan sát,-9.339886573145328e-06
+LightGBM,baskets,0.001175851206773132
+LightGBM,sales,0.0008542723637709471
+LightGBM,line_items,0.003010916806013758
+LightGBM,active_days,0.08894034487605401

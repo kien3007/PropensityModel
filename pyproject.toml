@@ -20,9 +20,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ipython>=8.0", "pytest>=8.0", "ruff>=0.4"]
-
-[project.scripts]
-propensity-v2 = "propensity_v2.cli:main"
+modeling = ["lightgbm>=4.7,<5"]
+hpo = ["optuna>=5,<6"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/propensity_v2"]

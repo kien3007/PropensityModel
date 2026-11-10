@@ -1,5 +1,1 @@
-"""Production-style household propensity package."""
-
-from .config import PropensityV2Config
-
-__all__ = ["PropensityV2Config"]
+"""Point-in-time prepared-data contract for the propensity POC."""

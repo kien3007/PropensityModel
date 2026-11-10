@@ -14,12 +14,7 @@ xelatex -interaction=nonstopmode -halt-on-error main.tex
 
 Trong Overleaf, upload thư mục này, chọn `main.tex` và compiler **XeLaTeX**. Các biểu đồ PDF đã được tạo sẵn trong `figures/`; không cần dữ liệu gốc để biên dịch. Điền tên/ngày ở đầu file `main.tex` và trong footline.
 
-Nếu Windows chưa nhận lệnh `xelatex` trong PATH nhưng MiKTeX đã được cài tại vị trí mặc định của máy này, chạy từ thư mục bài trình bày:
-
-```powershell
-& 'C:\Users\kienn\AppData\Local\Programs\MiKTeX\miktex\bin\x64\xelatex.exe' -disable-installer -interaction=nonstopmode -halt-on-error main.tex
-& 'C:\Users\kienn\AppData\Local\Programs\MiKTeX\miktex\bin\x64\xelatex.exe' -disable-installer -interaction=nonstopmode -halt-on-error main.tex
-```
+Nếu Windows chưa nhận lệnh `xelatex`, thêm thư mục chứa XeLaTeX của MiKTeX vào `PATH` rồi chạy lại hai lệnh trên.
 
 Bản đã biên dịch để xem ngay: `main.pdf`.
 

@@ -1,0 +1,4 @@
+﻿,train,validation
+label_window_touches_anomaly,2496,0
+history_90d_touches_anomaly,32461,0
+history_180d_touches_anomaly,64925,0

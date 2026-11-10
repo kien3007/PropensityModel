@@ -1,0 +1,59 @@
+{
+  "purpose": "Exploratory data understanding, not model training",
+  "snapshot_scope": "train snapshots days 180–537 inclusive; label days through 544",
+  "horizon_days": 7,
+  "selected_target": "any_basket",
+  "target_decision": "User confirmed any recorded BASKET_ID in (snapshot, snapshot+7], including zero-sales, fuel and miscellaneous baskets.",
+  "quantity_decision": "Exclude QUANTITY from cross-department behavior aggregation while units remain unverified; retain it in raw-data quality analysis.",
+  "rows": 129834,
+  "unique_households": 2498,
+  "transactions": 2595732,
+  "baskets": 276484,
+  "first_observed_day_median": 69.0,
+  "baskets_zero_sales": 942,
+  "baskets_only_fuel": 21108,
+  "validation": {
+    "existing_panel_checked": true,
+    "rows_compared": 129834,
+    "unmatched_keys": 0,
+    "label_disagreements": 0,
+    "raw_basket_sample_checks": 100
+  },
+  "scenarios": [
+    {
+      "definition": "any_basket",
+      "household_snapshots": 129834,
+      "positive_count": 68544,
+      "positive_rate": 0.527935671703868,
+      "diff_from_any": 0
+    },
+    {
+      "definition": "positive_basket",
+      "household_snapshots": 129834,
+      "positive_count": 68511,
+      "positive_rate": 0.5276815009935764,
+      "diff_from_any": 33
+    },
+    {
+      "definition": "grocery_department",
+      "household_snapshots": 129834,
+      "positive_count": 63235,
+      "positive_rate": 0.4870449959178644,
+      "diff_from_any": 5309
+    }
+  ],
+  "definitions": {
+    "any_basket": "at least one recorded BASKET_ID in (snapshot, snapshot+7]",
+    "positive_basket": "at least one basket whose sum of SALES_VALUE > 0 in the horizon",
+    "grocery_department": "at least one basket containing department GROCERY; excludes other food departments"
+  },
+  "cautions": [
+    "Outcomes describe purchases recorded by this retailer, not shopping elsewhere.",
+    "Household-snapshot observations repeat; counts and rates are not independent people.",
+    "Demographics are described retrospectively; availability at cutoff is unverified.",
+    "Coupon discount is a transaction signal, not proof of causal effect or exposure.",
+    "High quantity values are observed; units or scaling for fuel remain unverified.",
+    "SALES_VALUE is retailer receipts and may differ from customer out-of-pocket payment.",
+    "Days 278 and 643 have one basket each; source or calendar cause is unverified."
+  ]
+}

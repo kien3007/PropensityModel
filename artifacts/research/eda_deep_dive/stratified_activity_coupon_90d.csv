@@ -1,0 +1,10 @@
+activity_group,coupon_90d,household_snapshots,unique_households,positive_household_snapshots,purchase_rate
+0,không coupon discount,10357,670,688,0.06642850246210293
+1-3,có coupon discount,1912,306,473,0.24738493723849372
+1-3,không coupon discount,20196,1262,4078,0.2019211725094078
+4-9,có coupon discount,8776,836,3984,0.45396536007292615
+4-9,không coupon discount,26224,1605,10399,0.3965451494813911
+10-18,có coupon discount,14763,1062,10390,0.7037864932601775
+10-18,không coupon discount,17751,1306,11701,0.6591741310348713
+19+,có coupon discount,19165,853,17465,0.9112966344899557
+19+,không coupon discount,10690,753,9366,0.8761459307764266

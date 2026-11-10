@@ -1,0 +1,10 @@
+﻿,validation
+số cutoff,11.0
+tổng household-snapshot,27480.0
+tổng suất top 10%,2750.0
+lift trung bình giữa cutoff (không trọng số),1.313017655621574
+lift thấp nhất theo cutoff,1.281908064049412
+lift cao nhất theo cutoff,1.3315822529130321
+precision kỳ vọng gộp các suất tuần,0.7081683350605694
+lift kỳ vọng gộp các suất tuần,1.3129446665405782
+lift kỳ vọng top 10% gộp mọi cutoff,1.3127140471610506

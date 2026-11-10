@@ -1,0 +1,10 @@
+﻿"chi phí/liên hệ (USD, giả định)","lợi nhuận ròng/giao dịch tăng thêm (USD, giả định)",uplift hòa vốn (điểm %),có thể hòa vốn nếu uplift ≤ 100%
+0.1,5.0,2.0,True
+0.1,10.0,1.0,True
+0.1,20.0,0.5,True
+0.5,5.0,10.0,True
+0.5,10.0,5.0,True
+0.5,20.0,2.5,True
+1.0,5.0,20.0,True
+1.0,10.0,10.0,True
+1.0,20.0,5.0,True

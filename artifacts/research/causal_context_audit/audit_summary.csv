@@ -1,0 +1,10 @@
+﻿,0
+causal_rows,36786524.0
+causal_missing_key_rows,0.0
+unique_transaction_keys,1722750.0
+matched_transaction_keys,357651.0
+matched_transaction_key_rate,0.20760470178493687
+matched_transaction_rows,418016.0
+matched_transaction_row_rate,0.2213784038274755
+matched_keys_with_multiple_causal_rows,426.0
+transaction_rows_with_multiple_causal_matches,587.0

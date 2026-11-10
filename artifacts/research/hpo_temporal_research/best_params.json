@@ -1,0 +1,44 @@
+{
+  "best_params": {
+    "num_leaves": 24,
+    "min_child_samples": 58,
+    "reg_lambda": 7.325472849095979,
+    "learning_rate": 0.03212299411554841
+  },
+  "best_cv_brier": 0.16340089081952872,
+  "baseline_fold_brier": [
+    0.15873372809825842,
+    0.16285743021549978,
+    0.1664667808384015,
+    0.16627355546602166
+  ],
+  "trials": 30,
+  "seed": 42,
+  "features": [
+    "recency_days",
+    "observed_tenure_days",
+    "baskets_7d",
+    "sales_7d",
+    "line_items_7d",
+    "active_days_7d",
+    "baskets_30d",
+    "sales_30d",
+    "line_items_30d",
+    "active_days_30d",
+    "baskets_90d",
+    "sales_90d",
+    "line_items_90d",
+    "active_days_90d",
+    "baskets_180d",
+    "sales_180d",
+    "line_items_180d",
+    "active_days_180d",
+    "cadence_median_gap_180d",
+    "cadence_gap_std_180d",
+    "cadence_recency_ratio",
+    "cadence_has_gap",
+    "cadence_has_two_gaps"
+  ],
+  "lightgbm_version": "4.7.0",
+  "optuna_version": "5.0.0"
+}

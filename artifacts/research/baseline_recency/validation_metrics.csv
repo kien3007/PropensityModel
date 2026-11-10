@@ -1,0 +1,2 @@
+﻿rows,households,positive_rate,brier_score,log_loss,roc_auc,k,threshold,higher_count,ties_at_threshold,tie_slots,precision_at_k_expected,lift_at_k_expected
+27480,2499,0.5393740902474526,0.19959146196744876,0.584073362073274,0.7268430106468674,2748,0.7047387274069618,0,15838,2748,0.7080439449425433,1.3127140471610506

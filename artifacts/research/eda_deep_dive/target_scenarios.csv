@@ -1,0 +1,4 @@
+definition,household_snapshots,positive_count,positive_rate,diff_from_any
+any_basket,129834,68544,0.527935671703868,0
+positive_basket,129834,68511,0.5276815009935764,33
+grocery_department,129834,63235,0.4870449959178644,5309
