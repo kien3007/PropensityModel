@@ -1,14 +1,13 @@
-# Household Purchase Propensity — Dunnhumby POC
+# Household Purchase Propensity — Dunnhumby
 
-POC theo CRISP-DM dự báo xác suất một household có **ít nhất một basket được ghi nhận trong 7 ngày sau cutoff**, dựa trên lịch sử giao dịch. Đây là nghiên cứu khả thi và scoring giả lập, chưa đo tác động của coupon hoặc doanh thu tăng thêm.
+Dự án theo CRISP-DM nhằm dự báo xác suất một hộ có **ít nhất một giỏ hàng được ghi nhận trong 7 ngày sau mốc chốt**, dựa trên lịch sử giao dịch. Hiện phần trình bày tập trung vào tìm hiểu và khám phá dữ liệu; mô hình và chạy thử dự báo được giữ để tiếp tục phát triển. Dự án chưa đo tác động của phiếu giảm giá hay doanh thu tăng thêm.
 
 ## Bắt đầu từ đây
 
-1. [Báo cáo POC theo CRISP-DM](docs/BAO_CAO_POC_CRISP_DM.md): mục tiêu, phương pháp, kết quả và giới hạn.
-2. [Slide PDF](presentations/bao_cao_poc_propensity.pdf) và [nguồn LaTeX](presentations/bao_cao_poc_propensity.tex).
-3. [Data dictionary](docs/DUNNHUMBY_DATA_DICTIONARY.xlsx).
-4. [Notebook deployment giả lập](notebooks/deployment_gia_lap_propensity.ipynb) và [dự báo mẫu tại cutoff 711](artifacts/deployment_poc/household_scores_day_711.csv).
-5. [Hướng dẫn báo cáo EDA và bảo vệ feature](docs/HUONG_DAN_BAO_CAO_EDA_VA_FEATURE.md): giải thích bằng chứng, cách tính và câu hỏi thường gặp.
+1. [Slide phân tích dữ liệu (PDF)](presentations/dunnhumby_data_overview/main.pdf) và [nguồn LaTeX](presentations/dunnhumby_data_overview/main.tex): nội dung trình bày đến hết EDA, chưa đi vào kết quả mô hình.
+2. [Notebook phân tích dữ liệu](notebooks/phan_tich_du_lieu_propensity.ipynb): số liệu, biểu đồ và cách diễn giải.
+3. [Từ điển dữ liệu](docs/DUNNHUMBY_DATA_DICTIONARY.xlsx).
+4. [Hướng dẫn trình bày EDA và giải thích biến đầu vào](docs/HUONG_DAN_BAO_CAO_EDA_VA_FEATURE.md).
 
 ## Luồng notebook chính
 
@@ -43,7 +42,7 @@ Notebook Modeling & Evaluation huấn luyện lại baseline, Logistic Regressio
 
 ## Phiên bản POC
 
-Ứng viên bàn giao là LightGBM **18 feature + chu kỳ**, fit trên cutoff 180–439. Cutoff 453–481 dùng fit calibration và 495–537 dùng lựa chọn calibration; quy tắc đã chốt giữ xác suất thô. Test đã từng được xem trong quá trình phát triển và chỉ là kết quả tham khảo POC. Xem [báo cáo](docs/BAO_CAO_POC_CRISP_DM.md) trước khi trích dẫn chỉ số.
+Ứng viên thử nghiệm là LightGBM **18 biến giao dịch + biến chu kỳ**, học trên các mốc 180–439. Các mốc 453–481 dùng thử hiệu chỉnh xác suất, 495–537 dùng lựa chọn cách hiệu chỉnh; quy tắc đã chốt giữ xác suất gốc. Tập kiểm tra cuối đã từng được xem trong quá trình phát triển, nên kết quả chỉ mang tính tham khảo. Xem [notebook mô hình và đánh giá](notebooks/modeling_va_danh_gia_propensity.ipynb) trước khi trích dẫn chỉ số.
 
 `src/propensity_v2/prepared_data.py` xác thực hợp đồng dữ liệu đã chuẩn bị cho bốn notebook POC. Các script và tài liệu của pipeline V2 trước đây đã được loại khỏi luồng chính. Artifact POC hiện tại được giữ để đối chiếu và chạy demo.
 
