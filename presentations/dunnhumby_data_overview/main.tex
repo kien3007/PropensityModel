@@ -38,7 +38,7 @@
 \setbeamertemplate{footline}{%
   \leavevmode\hbox{%
     \begin{beamercolorbox}[wd=.64\paperwidth,ht=3.2mm,dp=1.6mm,leftskip=10mm]{footline}%
-      \tiny\color{muted}Dunnhumby | Data Understanding \& Preparation
+      \tiny\color{muted}Dunnhumby | Data Understanding \& EDA
     \end{beamercolorbox}%
     \begin{beamercolorbox}[wd=.25\paperwidth,ht=3.2mm,dp=1.6mm,center]{footline}%
       \tiny\color{muted}[Tên người trình bày]
@@ -50,10 +50,12 @@
 \newcommand{\src}[1]{\vspace{1mm}{\tiny\color{muted}Nguồn: #1}}
 \newcommand{\fig}[2]{\includegraphics[width=#1,height=.41\textheight,keepaspectratio]{figures/#2.pdf}}
 \newcommand{\largefig}[1]{\includegraphics[width=.96\linewidth,height=.58\textheight,keepaspectratio]{figures/#1.pdf}}
+\newcommand{\edafig}[1]{\includegraphics[width=.98\linewidth,height=.57\textheight,keepaspectratio]{eda_figures/#1.png}}
+\newcommand{\edashort}[1]{\includegraphics[width=.98\linewidth,height=.53\textheight,keepaspectratio]{eda_figures/#1.png}}
 \newcommand{\kpi}[2]{\begin{minipage}{.235\textwidth}\centering
   {\LARGE\bfseries\color{myBlue}#1}\\[2mm]{\small #2}\end{minipage}}
-\title{Tổng quan và chuẩn bị dữ liệu Dunnhumby}
-\subtitle{Khảo sát chất lượng và trực quan hóa dữ liệu bán lẻ}
+\title{Phân tích dữ liệu Dunnhumby cho bài toán dự đoán mua hàng}
+\subtitle{Dữ liệu có gì, đáng tin đến đâu và hành vi mua nói lên điều gì?}
 \author{[Tên người trình bày]}
 \date{[Ngày báo cáo]}
 
@@ -69,9 +71,9 @@
     (current page.north east) -- ([yshift=35mm]current page.south east) -- cycle;
 \end{tikzpicture}
 \vspace{6mm}
-{\color{white}\LARGE\bfseries TỔNG QUAN VÀ CHUẨN BỊ\\[2mm]
-DỮ LIỆU DUNNHUMBY}\par
-\vspace{6mm}{\color{white}\large Khảo sát chất lượng và trực quan hóa dữ liệu bán lẻ}\par
+{\color{white}\LARGE\bfseries PHÂN TÍCH DỮ LIỆU DUNNHUMBY\\[2mm]
+CHO BÀI TOÁN DỰ ĐOÁN MUA HÀNG}\par
+\vspace{6mm}{\color{white}\large Giai đoạn tìm hiểu và khám phá dữ liệu đã hoàn thành}\par
 \vspace{12mm}{\color{white}[Tên người trình bày] \quad | \quad [Ngày báo cáo]}
 \end{frame}
 
@@ -82,35 +84,35 @@ DỮ LIỆU DUNNHUMBY}\par
 \begin{block}{Câu hỏi cần trả lời}
 \begin{itemize}
 \item Bộ dữ liệu có những bảng nào, liên kết với nhau ra sao?
-\item Mỗi dòng, mỗi giỏ hàng và mỗi hộ đại diện cho điều gì?
-\item Những vấn đề chất lượng nào cần xử lý trước phân tích?
-\item Hành vi mua hàng thay đổi như thế nào theo thời gian và nhóm sản phẩm?
+\item Một dòng giao dịch, một giỏ hàng và một hộ khác nhau thế nào?
+\item Dữ liệu có thiếu, trùng hoặc giá trị khó giải thích không?
+\item Hành vi trước đây liên quan thế nào đến việc mua trong 7 ngày tới?
 \end{itemize}
 \end{block}
 \column{.47\textwidth}
 \textbf{Lộ trình}\vspace{3mm}
 \begin{enumerate}
-\item Tổng quan dữ liệu và grain
-\item Quy trình data preparation
-\item Các phát hiện từ visualization
-\item Giới hạn và việc cần xác nhận
+\item Dữ liệu gồm những gì?
+\item Chất lượng và cách kết nối các bảng
+\item Hành vi mua của hộ gia đình
+\item Những điều đã biết và còn chưa chắc chắn
 \end{enumerate}
 \vspace{4mm}
-{\small Bài toán propensity là bối cảnh sử dụng; báo cáo này tập trung vào dữ liệu.}
+{\small Phần này chỉ trình bày dữ liệu và kết quả khám phá, chưa đánh giá mô hình.}
 \end{columns}
 \end{frame}
 
 % 03
 \begin{frame}{Tổng quan quy mô bộ dữ liệu}
 \vspace{4mm}
-\kpi{2.500}{household}
-\kpi{276.484}{basket ID}
-\kpi{2.595.732}{dòng giao dịch}
-\kpi{711}{chỉ số ngày}
+\kpi{2.500}{hộ gia đình}
+\kpi{276.484}{giỏ hàng}
+\kpi{2.595.732}{dòng sản phẩm}
+\kpi{711}{ngày dữ liệu}
 \vspace{9mm}
 \begin{block}{Bối cảnh}
-Nhóm household mua sắm thường xuyên tại một retailer, với lịch sử mua khoảng hai năm.
-File local còn có product, demographic, campaign, coupon và thông tin trưng bày/gửi mail.
+Đây là lịch sử mua sắm của 2.500 hộ tại một nhà bán lẻ, trải dài khoảng hai năm.
+Ngoài giao dịch, dữ liệu còn có sản phẩm, thông tin hộ, chiến dịch, phiếu giảm giá và trưng bày.
 \end{block}
 \src{Audit local; \href{https://www.dunnhumby.com/source-files/}{dunnhumby Source Files --- The Complete Journey}.}
 \end{frame}
@@ -119,29 +121,29 @@ File local còn có product, demographic, campaign, coupon và thông tin trưng
 \begin{frame}{Danh mục tám bảng dữ liệu}
 \small\renewcommand{\arraystretch}{1.08}
 \begin{tabularx}{\textwidth}{>{\ttfamily}l r X}
-\toprule Bảng & Số dòng & Nội dung / grain \\
+\toprule Bảng & Số dòng & Mỗi dòng thể hiện \\
 \midrule
-transaction\_data & 2.595.732 & Dòng sản phẩm trong basket của household \\
-product & 92.353 & Danh mục sản phẩm, department và brand \\
-hh\_demographic & 801 & Thuộc tính household được cung cấp \\
-campaign\_table & 7.208 & Household gắn với campaign \\
-campaign\_desc & 30 & Mô tả và khoảng ngày của campaign \\
-coupon & 124.548 & Ánh xạ coupon -- sản phẩm -- campaign \\
-coupon\_redempt & 2.318 & Sự kiện household sử dụng coupon \\
-causal\_data & 36.786.524 & Display/mailer theo product -- store -- week \\
+transaction\_data & 2.595.732 & Một sản phẩm trong một giỏ hàng \\
+product & 92.353 & Một sản phẩm và nhóm hàng của nó \\
+hh\_demographic & 801 & Thông tin mô tả một hộ gia đình \\
+campaign\_table & 7.208 & Một hộ được gắn với một chiến dịch \\
+campaign\_desc & 30 & Một chiến dịch và thời gian diễn ra \\
+coupon & 124.548 & Một liên kết phiếu giảm giá -- sản phẩm -- chiến dịch \\
+coupon\_redempt & 2.318 & Một lần sử dụng phiếu giảm giá \\
+causal\_data & 36.786.524 & Một ghi nhận trưng bày/gửi quảng cáo theo sản phẩm -- cửa hàng -- tuần \\
 \bottomrule
 \end{tabularx}
-\src{\texttt{dataset\_inventory.csv}; causal\_data là tên bảng, không tự chứng minh quan hệ nhân quả.}
+\src{Notebook phân tích dữ liệu, mục 1; tên bảng causal\_data không có nghĩa dữ liệu chứng minh quan hệ nhân quả.}
 \end{frame}
 
 % 05
-\begin{frame}{Đơn vị quan sát và cấp độ dữ liệu}
+\begin{frame}{Một hộ có thể có nhiều giỏ hàng và nhiều dòng sản phẩm}
 \begin{center}
 \begin{tikzpicture}[node distance=9mm,
   box/.style={draw=myBlue,rounded corners,minimum height=10mm,text width=33mm,align=center,fill=pale},
   arrow/.style={-{Latex},thick,color=accent}]
-\node[box] (h) {1 household};
-\node[box,right=of h] (b) {N basket};
+\node[box] (h) {1 hộ gia đình};
+\node[box,right=of h] (b) {N giỏ hàng};
 \node[box,right=of b] (l) {N dòng sản phẩm};
 \draw[arrow] (h)--(b); \draw[arrow] (b)--(l);
 \end{tikzpicture}
@@ -150,14 +152,14 @@ causal\_data & 36.786.524 & Display/mailer theo product -- store -- week \\
 \begin{columns}[T,onlytextwidth]
 \column{.48\textwidth}
 \textbf{Ví dụ cấu trúc}\vspace{1mm}
-\begin{tabular}{rrr}\toprule household & basket & product \\
+\begin{tabular}{rrr}\toprule hộ & giỏ & sản phẩm \\
 1 & A & sữa \\ 1 & A & bánh \\ 1 & B & gạo \\
 \bottomrule\end{tabular}
 \column{.48\textwidth}
 \begin{itemize}
-\item 3 dòng sản phẩm, 2 basket, 1 household.
-\item Đếm basket bằng số \texttt{BASKET\_ID} phân biệt.
-\item Một hộ có thể có nhiều basket trong một ngày.
+\item 3 dòng sản phẩm thuộc 2 giỏ của 1 hộ.
+\item Đếm giỏ theo số mã \texttt{BASKET\_ID} khác nhau.
+\item Một hộ có thể có nhiều giỏ trong cùng ngày.
 \end{itemize}
 \end{columns}
 \end{frame}
@@ -168,13 +170,13 @@ causal\_data & 36.786.524 & Display/mailer theo product -- store -- week \\
 \begin{tikzpicture}[scale=.78,transform shape,node distance=8mm,
   box/.style={draw=myBlue,rounded corners,minimum height=9mm,text width=30mm,align=center,fill=pale,font=\small},
   arrow/.style={-{Latex},thick,color=accent}]
-\node[box,fill=myBlue,text=white] (tx) {Transactions};
-\node[box,left=15mm of tx] (hh) {Household};
-\node[box,right=15mm of tx] (pr) {Product};
-\node[box,above=9mm of hh] (demo) {Demographic};
-\node[box,below=9mm of hh] (camp) {Campaign};
-\node[box,below=9mm of pr] (coup) {Coupon / redemption};
-\node[box,above=9mm of pr] (med) {Display / mailer};
+\node[box,fill=myBlue,text=white] (tx) {Giao dịch};
+\node[box,left=15mm of tx] (hh) {Hộ gia đình};
+\node[box,right=15mm of tx] (pr) {Sản phẩm};
+\node[box,above=9mm of hh] (demo) {Thông tin hộ};
+\node[box,below=9mm of hh] (camp) {Chiến dịch};
+\node[box,below=9mm of pr] (coup) {Phiếu giảm giá};
+\node[box,above=9mm of pr] (med) {Trưng bày / mailer};
 \draw[arrow] (hh)--node[above,font=\tiny]{household\_key}(tx);
 \draw[arrow] (pr)--node[above,font=\tiny]{PRODUCT\_ID}(tx);
 \draw[arrow] (demo)--(hh); \draw[arrow] (camp)--(hh);
@@ -182,22 +184,22 @@ causal\_data & 36.786.524 & Display/mailer theo product -- store -- week \\
 \end{tikzpicture}
 \vspace{3mm}
 \begin{block}{Hàm ý đối với kết nối dữ liệu}
-Coupon tạo quan hệ nhiều-nhiều; display/mailer có cấp độ product--store--week.
-Quá trình kết nối cần bảo toàn cấp độ quan sát và kiểm tra số dòng sau join.
+Một phiếu giảm giá có thể gắn với nhiều sản phẩm; thông tin trưng bày được ghi theo sản phẩm, cửa hàng và tuần.
+Khi nối bảng, cần kiểm tra số dòng để tránh vô tình nhân đôi giao dịch.
 \end{block}
 \end{frame}
 
 % 07
-\begin{frame}{Quy trình chuẩn bị dữ liệu}
+\begin{frame}{Dữ liệu được kiểm tra và chuẩn bị ra sao?}
 \begin{enumerate}
-\item \textbf{Inventory:} số dòng, cột, kiểu dữ liệu, kích thước và grain.
-\item \textbf{Schema:} chọn cột, xác định kiểu ID, ngày, số tiền; giữ nguyên dữ liệu nguồn.
-\item \textbf{Quality:} kiểm tra null, duplicate, giá trị bất thường và tính nhất quán basket.
-\item \textbf{Joins:} kiểm tra uniqueness, orphan keys và tỷ lệ match trước khi nối.
-\item \textbf{Aggregation:} transaction line $\rightarrow$ basket $\rightarrow$ household-day.
-\item \textbf{Visualization:} mô tả thời gian, số lượt mua, sản phẩm và độ phủ.
+\item \textbf{Kiểm kê:} đếm dòng, cột và xác định mỗi dòng đại diện cho điều gì.
+\item \textbf{Chuẩn hóa cách đọc:} nhận diện mã, ngày, tiền; không sửa trực tiếp dữ liệu gốc.
+\item \textbf{Kiểm tra chất lượng:} tìm dữ liệu thiếu, dòng trùng và giá trị bất thường.
+\item \textbf{Nối bảng:} kiểm tra khóa và số dòng trước, sau khi nối.
+\item \textbf{Tổng hợp:} từ dòng sản phẩm $\rightarrow$ giỏ hàng $\rightarrow$ hoạt động của hộ theo ngày.
+\item \textbf{Khám phá:} xem nhịp mua, nhóm hàng, mức độ bao phủ và so sánh các nhóm hộ.
 \end{enumerate}
-\vspace{3mm}\begin{block}{Kết quả đầu ra}Các bảng thống kê có đơn vị quan sát, khóa liên kết và mẫu số được xác định rõ.\end{block}
+\vspace{3mm}\begin{block}{Kết quả đầu ra}Mỗi bảng thống kê đều nêu rõ đang đếm dòng, giỏ hàng hay hộ gia đình.\end{block}
 \end{frame}
 
 % 08
@@ -205,10 +207,10 @@ Quá trình kết nối cần bảo toàn cấp độ quan sát và kiểm tra s
 \begin{center}\largefig{household_coverage}\end{center}
 \vspace{-2mm}
 \begin{itemize}\small
-\item \textbf{Kết quả:} transaction không có ô null; 801 / 2.500 hộ có demographic.
-\item \textbf{Hàm ý:} dùng left join để giữ các hộ không có thông tin nhân khẩu học.
+\item \textbf{Kết quả:} bảng giao dịch không có ô trống; chỉ 801/2.500 hộ có thông tin nhân khẩu học.
+\item \textbf{Cách xử lý:} khi nối bảng thông tin hộ, vẫn giữ cả những hộ không có thông tin này.
 \end{itemize}
-\src{Audit local; mẫu số là 2.500 household có giao dịch.}
+\src{Kiểm tra dữ liệu gốc; mẫu số là 2.500 hộ có giao dịch.}
 \end{frame}
 
 % 09
@@ -217,17 +219,17 @@ Quá trình kết nối cần bảo toàn cấp độ quan sát và kiểm tra s
 \column{.50\textwidth}
 \begin{block}{Phát hiện}
 \begin{itemize}
-\item Transaction: 0 dòng trùng hoàn toàn trên 12 cột nguồn.
-\item Product: \texttt{PRODUCT\_ID} duy nhất trong catalog.
-\item Coupon: 5.164 dòng trùng hoàn toàn trên 3 cột.
+\item Giao dịch: không có hai dòng giống hệt nhau trên cả 12 cột.
+\item Sản phẩm: mỗi \texttt{PRODUCT\_ID} chỉ xuất hiện một lần trong danh mục.
+\item Phiếu giảm giá: có 5.164 dòng giống hệt nhau trên cả 3 cột.
 \end{itemize}
 \end{block}
 \column{.47\textwidth}
 \textbf{Hàm ý xử lý}\vspace{2mm}
 \begin{itemize}
-\item Giữ dữ liệu gốc và ghi nhận số dòng trùng trong báo cáo chất lượng.
-\item Đánh giá 5.164 dòng coupon theo cấp độ mapping trước khi loại trùng.
-\item Xác định trùng lặp trên đúng đơn vị quan sát của từng bảng.
+\item Giữ bản gốc và ghi nhận số dòng trùng.
+\item Chỉ loại dòng phiếu giảm giá trùng sau khi xác định đúng ý nghĩa mỗi dòng.
+\item Không coi nhiều sản phẩm trong cùng giỏ là dòng trùng.
 \end{itemize}
 \end{columns}
 \end{frame}
@@ -236,50 +238,50 @@ Quá trình kết nối cần bảo toàn cấp độ quan sát và kiểm tra s
 \begin{frame}{Kiểm tra tính toàn vẹn trước khi kết nối dữ liệu}
 \small\renewcommand{\arraystretch}{1.2}
 \begin{tabularx}{\textwidth}{Xrl}
-\toprule Kiểm tra & Kết quả & Diễn giải \\
+\toprule Nội dung kiểm tra & Kết quả & Ý nghĩa \\
 \midrule
-Transaction product khớp catalog & 100\% & Join product many-to-one \\
-Basket thuộc nhiều household & 0 & Một ID không bị chia sẻ giữa hộ \\
-Basket thuộc nhiều ngày & 0 & Ngày nhất quán theo basket \\
-Redemption có campaign được biết & 100\% & Kiểm tra khóa campaign \\
-Redemption trong campaign window & 100\% & Kiểm tra ngày bắt đầu/kết thúc \\
+Sản phẩm giao dịch có trong danh mục & 100\% & Có thể nối theo mã sản phẩm \\
+Một mã giỏ thuộc nhiều hộ & 0 & Mỗi giỏ thuộc đúng một hộ \\
+Một mã giỏ thuộc nhiều ngày & 0 & Ngày ghi nhận nhất quán \\
+Lần dùng phiếu có mã chiến dịch hợp lệ & 100\% & Mã có trong bảng chiến dịch \\
+Lần dùng phiếu nằm trong thời gian chiến dịch & 100\% & Ngày dùng nằm trong khoảng được ghi \\
 \bottomrule
 \end{tabularx}
 \vspace{4mm}
 \begin{block}{Hàm ý phân tích}
-Khóa sản phẩm trong catalog duy nhất và match toàn bộ transaction;
-quan hệ này cho phép kết nối nhiều-một, đồng thời đối chiếu số dòng trước/sau join.
+Mã sản phẩm không trùng trong danh mục và mọi giao dịch đều tìm được sản phẩm tương ứng.
+Vì vậy có thể nối bảng sản phẩm mà không làm tăng số dòng giao dịch.
 \end{block}
-\src{Audit local; kiểm tra khóa và khoảng ngày trên các bảng được cung cấp.}
+\src{Kiểm tra trên các bảng được cung cấp; không xác nhận nội dung thực tế của chiến dịch.}
 \end{frame}
 
 % 11
-\begin{frame}{Phân bố QUANTITY và vấn đề đơn vị đo}
+\begin{frame}{QUANTITY: biết lượng mua, chưa rõ đơn vị ở mọi nhóm hàng}
 \begin{center}\largefig{quantity_semantics}\end{center}
 \vspace{-2mm}
 \begin{itemize}\small
-\item \textbf{Kết quả:} 23.136 dòng có \texttt{QUANTITY > 100}, tập trung ở fuel/misc.
-\item \textbf{Diễn giải:} user guide mô tả lượng mua, nhưng không nêu đơn vị riêng cho fuel; chưa tổng hợp xuyên nhóm.
+\item Có 23.136 dòng \texttt{QUANTITY > 100}, chủ yếu ở nhiên liệu và nhóm hàng khác.
+\item Tài liệu chỉ gọi đây là lượng mua, không nêu rõ đơn vị riêng cho nhiên liệu; vì vậy chưa cộng lượng mua giữa các nhóm hàng.
 \end{itemize}
 \src{Audit transaction--product; The Complete Journey User Guide, trang 3.}
 \end{frame}
 
 % 12
-\begin{frame}{Kiểm tra giỏ hàng có doanh số bằng không}
+\begin{frame}{Giỏ hàng có doanh số bằng 0 vẫn là lượt mua được ghi nhận}
 \begin{columns}[T,onlytextwidth]
 \column{.48\textwidth}
-{\LARGE\bfseries 942}\\[1mm]basket có tổng sales = 0\vspace{4mm}
+{\LARGE\bfseries 942}\\[1mm]giỏ có tổng doanh số bằng 0\vspace{4mm}
 \begin{itemize}
-\item 275.542 basket có tổng sales dương.
-\item 18.850 transaction lines có sales bằng 0.
-\item Một dòng 0 đồng không mặc nhiên là lỗi: có thể phản ánh khuyến mãi hoặc quy ước ghi nhận.
+\item 275.542 giỏ có tổng doanh số dương.
+\item 18.850 dòng sản phẩm có doanh số bằng 0.
+\item Dòng 0 đồng chưa chắc là lỗi; dữ liệu không cho biết đầy đủ nguyên nhân.
 \end{itemize}
 \column{.48\textwidth}
-\begin{block}{Hàm ý đối với định nghĩa mua hàng}
-Số giỏ được xác định phụ thuộc vào quy tắc đưa basket zero-sales, fuel và miscellaneous vào phạm vi phân tích.
+\begin{block}{Định nghĩa đã chốt}
+Nhãn cần dự đoán là \textbf{có bất kỳ giỏ hàng nào} trong 7 ngày tới; kể cả giỏ 0 đồng, nhiên liệu và nhóm hàng khác.
 \end{block}
 \vspace{2mm}
-\textbf{Phạm vi hiện tại:} thống kê mô tả bao gồm toàn bộ basket được ghi nhận.
+\textbf{Vì vậy:} không loại giỏ hàng chỉ vì doanh số bằng 0.
 \end{columns}
 \end{frame}
 
@@ -287,18 +289,18 @@ Số giỏ được xác định phụ thuộc vào quy tắc đưa basket zero-
 \begin{frame}{Phân bố số giỏ hàng theo ngày}
 \begin{center}\largefig{daily_baskets}\end{center}
 \vspace{-2mm}\begin{itemize}\small
-\item \textbf{Kết quả:} hoạt động tăng ở giai đoạn đầu; ngày 278 và 643 chỉ có 1 basket/ngày.
-\item \textbf{Diễn giải:} hai điểm giảm sâu có nguyên nhân chưa xác định; đường đậm là trung bình 14 ngày.
+\item Số giỏ tăng ở giai đoạn đầu; riêng ngày 278 và 643 chỉ ghi nhận 1 giỏ/ngày.
+\item Chưa biết vì sao hai ngày này thấp bất thường; đường đậm thể hiện trung bình 14 ngày.
 \end{itemize}
-\src{Transaction data; DAY là chỉ số tương đối, không có ngày lịch được xác nhận.}
+\src{Bảng giao dịch; \texttt{DAY} là số thứ tự ngày, chưa xác định được ngày lịch.}
 \end{frame}
 
 % 14
 \begin{frame}{Phân bố thời điểm xuất hiện đầu tiên của hộ}
 \begin{center}\largefig{first_observed}\end{center}
 \vspace{-2mm}\begin{itemize}\small
-\item \textbf{Kết quả:} trung vị ngày xuất hiện đầu tiên là \textbf{69}.
-\item \textbf{Diễn giải:} thời gian quan sát khác nhau giữa các hộ; ngày xuất hiện không nhất thiết là ngày gia nhập.
+\item Một nửa số hộ bắt đầu xuất hiện từ ngày \textbf{69} trở về trước.
+\item Đây là ngày mua đầu tiên \textbf{được ghi trong dữ liệu}, không chắc là ngày họ bắt đầu làm khách hàng.
 \end{itemize}
 \end{frame}
 
@@ -306,28 +308,28 @@ Số giỏ được xác định phụ thuộc vào quy tắc đưa basket zero-
 \begin{frame}{Phân bố số giỏ hàng theo hộ gia đình}
 \begin{center}\largefig{basket_per_household}\end{center}
 \vspace{-2mm}\begin{itemize}\small
-\item \textbf{Kết quả:} trung vị \textbf{79}, trung bình \textbf{110,6} basket / hộ.
-\item \textbf{Diễn giải:} phân bố lệch phải; 39.179 household-day có từ 2 basket trở lên.
+\item Một hộ có trung vị \textbf{79} giỏ, trung bình \textbf{110,6} giỏ trong toàn kỳ.
+\item Một số hộ mua nhiều hơn hẳn phần còn lại; có 39.179 lượt hộ--ngày với từ 2 giỏ trở lên.
 \end{itemize}
-\src{Giới hạn hiển thị: 600 basket/hộ; thống kê tính trên dữ liệu đầy đủ.}
+\src{Biểu đồ chỉ hiển thị đến 600 giỏ/hộ; số liệu thống kê vẫn tính trên toàn bộ dữ liệu.}
 \end{frame}
 
 % 16
 \begin{frame}{Phân bố số dòng sản phẩm trong giỏ hàng}
 \begin{center}\largefig{lines_per_basket}\end{center}
 \vspace{-2mm}\begin{itemize}\small
-\item \textbf{Kết quả:} trung vị \textbf{5 dòng}, trung bình \textbf{9,39 dòng} / basket.
-\item \textbf{Diễn giải:} một số basket lớn tạo đuôi phải; dòng sản phẩm và basket có cấp độ khác nhau.
+\item Một giỏ có trung vị \textbf{5 dòng sản phẩm}, trung bình \textbf{9,39 dòng}.
+\item Có những giỏ lớn hơn nhiều so với giỏ thông thường; không nhầm số dòng với số giỏ.
 \end{itemize}
-\src{Giới hạn hiển thị: 60 dòng/basket; thống kê tính trên dữ liệu đầy đủ.}
+\src{Biểu đồ chỉ hiển thị đến 60 dòng/giỏ; số liệu thống kê vẫn tính trên toàn bộ dữ liệu.}
 \end{frame}
 
 % 17
 \begin{frame}{Cơ cấu doanh số ghi nhận theo nhóm hàng}
 \begin{center}\largefig{department_sales}\end{center}
 \vspace{-2mm}\begin{itemize}\small
-\item \textbf{Kết quả:} GROCERY chiếm \textbf{50,8\%}; DRUG GM 13,1\%; PRODUCE 6,9\%.
-\item \textbf{Diễn giải:} cơ cấu giao dịch bao gồm cả fuel và miscellaneous ngoài grocery.
+\item Nhóm tạp hóa (GROCERY) chiếm \textbf{50,8\%} doanh số; DRUG GM 13,1\%; rau quả (PRODUCE) 6,9\%.
+\item Dữ liệu không chỉ có tạp hóa mà còn ghi nhận nhiên liệu và các nhóm hàng khác.
 \end{itemize}
 \src{Tổng SALES\_VALUE retailer nhận được; hiển thị 8 department lớn nhất. User Guide, trang 3.}
 \end{frame}
@@ -336,50 +338,231 @@ Số giỏ được xác định phụ thuộc vào quy tắc đưa basket zero-
 \begin{frame}{Cơ cấu doanh số ghi nhận theo loại nhãn hàng}
 \begin{center}\largefig{brand_mix}\end{center}
 \vspace{-2mm}\begin{itemize}\small
-\item \textbf{Kết quả:} National chiếm \textbf{72,2\%}; private chiếm \textbf{27,8\%}.
-\item \textbf{Diễn giải:} đây là cơ cấu SALES\_VALUE trong mẫu household được cung cấp.
+\item Nhãn hàng của nhà sản xuất (National) chiếm \textbf{72,2\%} doanh số; nhãn riêng (Private) chiếm \textbf{27,8\%}.
+\item Tỷ lệ này tính theo doanh số của các hộ trong bộ dữ liệu, không đại diện toàn bộ khách hàng của nhà bán lẻ.
 \end{itemize}
 \end{frame}
 
 % 19
-\begin{frame}{Dữ liệu chiến dịch, coupon và hoạt động truyền thông}
+\begin{frame}{Dữ liệu bổ sung về chiến dịch và thông tin hộ}
 \small
 \begin{tabularx}{\textwidth}{>{\bfseries}p{3cm}X X}
-\toprule Nguồn & Kết quả quan sát & Cấp độ thông tin \\
+\toprule Nguồn & Quy mô/độ phủ & Mỗi dòng thể hiện \\
 \midrule
-Campaign & 63,36\% household có assignment & Household--campaign. \\
-Coupon / redemption & 2.318 redemption events & Household--coupon--ngày. \\
-Display / mailer & 36,79 triệu dòng & Product--store--week. \\
-Demographic & 801 household có thông tin & Household; không bao phủ toàn bộ mẫu. \\
+Chiến dịch & 63,36\% hộ được gắn chiến dịch & Một hộ -- một chiến dịch. \\
+Sử dụng phiếu & 2.318 lần sử dụng & Một hộ -- một phiếu -- một ngày. \\
+Trưng bày / mailer & 36,79 triệu dòng & Một sản phẩm -- cửa hàng -- tuần. \\
+Thông tin hộ & 801 hộ có hồ sơ & Một hộ; không bao phủ cả mẫu. \\
 \bottomrule
 \end{tabularx}
 \vspace{4mm}\begin{block}{Hàm ý nghiên cứu}
-Các bảng bổ sung bối cảnh mua sắm ở nhiều cấp độ; dữ liệu quan sát hỗ trợ mô tả và xây dựng giả thuyết.
+Những bảng này giúp hiểu thêm bối cảnh mua sắm, nhưng không cho biết chắc khách đã nhìn thấy quảng cáo hay vì sao họ mua hàng.
 \end{block}
 \end{frame}
 
-% 20
-\begin{frame}{Kết luận và các vấn đề cần xác minh}
-\begin{columns}[T,onlytextwidth]
-\column{.50\textwidth}
-\textbf{Kết quả chính}\vspace{2mm}
-\begin{itemize}
-\item Grain, khóa và quan hệ giữa 8 bảng.
-\item Transaction không thiếu giá trị; product match 100\%.
-\item Basket lặp theo household và thời gian.
-\item Có khác biệt rõ về department, brand và độ phủ bảng bổ trợ.
+% EDA 01
+\begin{frame}{Thế nào được tính là mua hàng trong 7 ngày tới?}
+\begin{center}\edafig{target_scenarios}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Một hộ được tính là \textbf{có mua} nếu xuất hiện ít nhất một mã giỏ trong 7 ngày sau mốc chốt $s$. Tỷ lệ này là 52,79\% trên 129.834 lần quan sát hộ--mốc.
+\item Nếu chỉ tính giỏ có doanh số dương, 33 nhãn đổi; nếu chỉ tính tạp hóa, 5.309 nhãn đổi.
 \end{itemize}
-\column{.47\textwidth}
-\textbf{Giới hạn và hướng nghiên cứu}\vspace{2mm}
+\src{Notebook phân tích dữ liệu, mục 5.2; hai cách tính thay thế chỉ dùng để kiểm tra định nghĩa.}
+\end{frame}
+
+% EDA 02
+\begin{frame}{Vì sao cần mốc chốt dữ liệu cho từng hộ?}
+\vspace{3mm}
+\begin{center}
+\begin{tikzpicture}[x=1cm,y=1cm,>=Latex]
+\draw[very thick,accent,-{Latex}] (0,0)--(10.4,0);
+\draw[fill=pale,draw=myBlue] (.4,-.35) rectangle (6.0,.35);
+\draw[fill=accent!20,draw=accent] (6.0,-.35) rectangle (9.2,.35);
+\draw[thick] (6.0,-.5)--(6.0,.55);
+\node[above] at (3.2,.35) {Lịch sử quan sát đến $s$};
+\node[above] at (7.6,.35) {Nhãn $(s,s+7]$};
+\node[below] at (6.0,-.5) {mốc chốt $s$};
+\end{tikzpicture}
+\end{center}
+\vspace{5mm}
 \begin{itemize}
-\item Kiểm chứng định nghĩa giao dịch mua và đơn vị \texttt{QUANTITY}.
-\item Đối chiếu hai ngày có lượng giao dịch thấp với nguồn dữ liệu.
-\item Bổ sung thông tin ngày lịch và thời điểm ghi nhận demographic nếu có.
-\item Đánh giá giới hạn đại diện và phạm vi quan sát của mẫu.
+\item Mỗi lần quan sát gồm \textbf{một hộ tại một mốc chốt}; cùng một hộ có thể được quan sát ở nhiều tuần.
+\item Chỉ dùng thông tin đã có đến mốc chốt để xem hộ có mua trong 7 ngày sau đó không.
+\item Các mốc dùng để phân tích trải từ ngày 180 đến 537, cách nhau 7 ngày; hộ cần từng có giỏ hàng trước hoặc tại mốc.
+\item Vì một hộ xuất hiện nhiều lần, tỷ lệ theo số lần quan sát không phải tỷ lệ theo số hộ khác nhau.
+\end{itemize}
+\src{Notebook EDA, mục 5; \texttt{DAY} là chỉ số ngày tương đối.}
+\end{frame}
+
+% EDA 03
+\begin{frame}{Mua gần đây liên quan đến khả năng mua tiếp}
+\begin{center}\edafig{recency_activity}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Trong nhóm vừa mua cách đây 0--7 ngày, 70,47\% có giỏ trong 7 ngày tiếp theo; nhóm đã hơn 90 ngày chưa mua chỉ đạt 6,56\%.
+\item Đếm \textbf{số ngày có mua} trong 90 ngày để đo nhịp hoạt động; một ngày có thể có nhiều giỏ.
+\end{itemize}
+\src{Notebook phân tích dữ liệu, mục 6; đây là mối liên hệ quan sát được, không chứng minh nguyên nhân.}
+\end{frame}
+
+% EDA 04
+\begin{frame}{Chọn 40 hộ điển hình để nhìn rõ nhịp mua}
+\vspace{3mm}
+\begin{block}{Cách chọn hộ minh họa tại mốc ngày 537}
+Chia hộ theo số \textbf{ngày có mua trong 90 ngày}: ít nhất, gần trung bình, gần trung vị và nhiều nhất. Mỗi nhóm chọn 10 hộ khác nhau.
+\end{block}
+\vspace{4mm}
+\begin{itemize}
+\item Trung bình và trung vị được tính trên toàn bộ hộ đủ điều kiện tại mốc chốt, theo số ngày mua chứ không theo số giỏ.
+\item Ô màu trong lịch cho biết số giỏ mỗi ngày; trục tuần chỉ là tuần tương đối, không xác định thứ trong tuần.
+\item Các hộ được chọn để \textbf{minh họa bốn mức hoạt động}, không phải mẫu đại diện cho toàn bộ dữ liệu.
+\end{itemize}
+\vspace{3mm}
+\src{Notebook EDA, mục 6.1, chứa đủ bốn biểu đồ lịch hoạt động.}
+\end{frame}
+
+% EDA 05
+\begin{frame}{Mua ở nhiều nhóm hàng đi kèm tỷ lệ mua tiếp cao hơn}
+\begin{center}\edafig{department_activity}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Xét toàn bộ mẫu, hộ mua ở 1--3 nhóm hàng có tỷ lệ mua tiếp 23,13\%; hộ mua ở ít nhất 11 nhóm đạt 84,75\%.
+\item Nếu cùng có 4--9 ngày mua trong 90 ngày, tỷ lệ tương ứng là 33,31\% và 51,56\%.
+\end{itemize}
+\src{Notebook phân tích dữ liệu, mục 6.2; nhóm dưới 30 lượt quan sát hộ được tô xám.}
+\end{frame}
+
+% EDA 06
+\begin{frame}{Giỏ có giảm giá không đồng nghĩa mua tiếp nhiều hơn}
+\begin{center}\edashort{discount_activity}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Một giỏ được tính là có giảm giá nếu ít nhất một dòng sản phẩm ghi nhận giá trị giảm ở một trong ba cột liên quan.
+\item Ở 90.618 lần quan sát hộ, hơn 75\% giỏ trong 90 ngày từng có giảm giá. Đây là \textbf{tỷ lệ giỏ}, không phải tiết kiệm 75\% tiền.
+\end{itemize}
+\src{Notebook phân tích dữ liệu, mục 6.3; chỉ biết giảm giá tại giao dịch, không biết hộ đã nhìn thấy ưu đãi nào.}
+\end{frame}
+
+% EDA 07
+\begin{frame}{Nhiên liệu: chênh lệch giảm mạnh khi so hộ có nhịp mua giống nhau}
+\begin{center}\edafig{fuel_activity}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Nếu không chia nhóm, hộ từng mua nhiên liệu có tỷ lệ mua tiếp 73,39\%, so với 45,05\% ở hộ không mua.
+\item Nhưng trong nhóm cùng có 4--9 ngày mua, hai tỷ lệ chỉ còn 41,89\% và 40,93\%.
+\end{itemize}
+\src{Notebook phân tích dữ liệu, mục 7; so cùng nhịp mua vẫn chưa kiểm soát được mọi khác biệt giữa các hộ.}
+\end{frame}
+
+% EDA 08
+\begin{frame}{Phiếu giảm giá và thông tin hộ: cần xem số mẫu trước khi kết luận}
+\vspace{2mm}\small\renewcommand{\arraystretch}{1.28}
+\begin{tabularx}{\textwidth}{p{29mm}X X}
+\toprule Chủ đề & Điều quan sát được & Cần lưu ý \\
+\midrule
+Sử dụng phiếu & Nhóm dùng phiếu và chỉ mua 1--3 ngày: 9 lần quan sát, đều từ 1 hộ. & Nhóm quá nhỏ để đại diện; dùng phiếu khác với việc chỉ nhìn thấy ưu đãi. \\
+Thông tin hộ & 801/2.500 hộ có hồ sơ; tỷ lệ mua tiếp của nhóm có/không có hồ sơ là 76,61\%/41,55\%. & Nhóm có hồ sơ có thể khác về nhịp mua; chưa rõ hồ sơ có từ thời điểm nào. \\
+\bottomrule
+\end{tabularx}
+\vspace{5mm}
+\begin{block}{Quy tắc diễn giải}
+Không thể kết luận phiếu giảm giá làm khách mua thêm. Cũng chưa nên dùng thông tin hộ cho các mốc quá khứ khi chưa biết lúc đó thông tin đã tồn tại hay chưa.
+\end{block}
+\src{Notebook phân tích dữ liệu, mục 8--9; cùng một hộ có thể được tính ở nhiều mốc.}
+\end{frame}
+
+% EDA 09
+\begin{frame}{Theo thời gian, cần đọc tỷ lệ mua cùng số hộ trong nhóm}
+\begin{center}\edafig{activity_over_time}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Đường tỷ lệ của nhóm ít hộ dễ dao động, nên cần nhìn cả biểu đồ số lượt quan sát bên dưới.
+\item Mốc chốt 271 được đánh dấu vì 7 ngày theo sau có ngày 278 chỉ ghi nhận 1 giỏ.
+\end{itemize}
+\src{Notebook EDA, mục 6.5; biểu đồ không xác định nguyên nhân biến động.}
+\end{frame}
+
+% EDA 10
+\begin{frame}{Hai ngày có rất ít giỏ: ảnh hưởng đến phần nào của phân tích?}
+\vspace{3mm}\small\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\textwidth}{lXr}
+\toprule Ngày dữ liệu & Mốc chốt có 7 ngày tiếp theo chứa ngày này & Số hộ đủ điều kiện \\
+\midrule
+278 & Mốc 271, phần dùng để phân tích & 2.496 \\
+643 & Mốc 642, phần để đánh giá sau này & 2.499 \\
+\bottomrule
+\end{tabularx}
+\vspace{5mm}
+\begin{itemize}
+\item Cửa sổ 90 ngày trước mốc của 13 lần quan sát ở phần phân tích và 8 lần ở phần đánh giá cũng chứa một trong hai ngày.
+\item Đây là \textbf{phạm vi có thể bị ảnh hưởng}, không phải số nhãn bị sai.
+\item Chưa biết ngày lịch hay nguyên nhân; giữ dữ liệu gốc và đánh dấu để kiểm tra thêm.
+\end{itemize}
+\src{Notebook EDA, mục 10; phép đếm dựa trên thời gian và eligibility, không dùng nhãn test.}
+\end{frame}
+
+% EDA 11
+\begin{frame}{RFM: hộ mua gần đây, thường xuyên và bao nhiêu tiền?}
+\begin{center}\edashort{rfm_distributions}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Tại mốc ngày 537: $R$ là số ngày từ lần mua gần nhất; $F$ là số giỏ trong 90 ngày; $M$ là tổng doanh số trong 90 ngày.
+\item Mỗi hộ xuất hiện một lần. Trên biểu đồ, giá trị vượt phân vị 99 được gom vào cột cuối để dễ nhìn; không xóa chúng khỏi dữ liệu.
+\end{itemize}
+\src{Notebook phân tích dữ liệu, mục 11.1; $M$ là doanh số ghi nhận, không phải lợi nhuận hay giá trị vòng đời khách hàng.}
+\end{frame}
+
+% EDA 12
+\begin{frame}{Mua gần và mua thường xuyên: đọc hai chiều cùng nhau}
+\begin{center}\edafig{rf_heatmap}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Mỗi ô cho biết tỷ lệ hộ có giỏ trong ngày 538--544 và số hộ của nhóm tại mốc 537.
+\item Nhóm dưới 30 hộ được tô xám vì tỷ lệ dễ thiếu ổn định; ranh giới các nhóm chỉ phục vụ mô tả.
+\end{itemize}
+\src{Notebook EDA, mục 11.2; bảng chi tiết vẫn giữ các ô nhỏ.}
+\end{frame}
+
+% EDA 13
+\begin{frame}{Chi nhiều tiền có thể đi cùng việc mua nhiều lần}
+\begin{center}\edashort{monetary_groups}\end{center}
+\vspace{-2mm}\begin{itemize}\small
+\item Tách hộ không có giỏ, hộ có giỏ nhưng doanh số không dương và bốn nhóm doanh số dương từ thấp đến cao.
+\item Nhóm chi nhiều có thể cũng mua thường xuyên hơn; doanh số cao chưa có nghĩa lợi nhuận cao.
+\end{itemize}
+\src{Notebook phân tích dữ liệu, mục 11.3; bốn nhóm doanh số được chia tại mốc 537 để mô tả.}
+\end{frame}
+
+% EDA 14
+\begin{frame}{Từ EDA đến quyết định sử dụng dữ liệu}
+\small\renewcommand{\arraystretch}{1.18}
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{35mm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X}
+\toprule Điều quan sát được & Có thể biểu diễn tại mốc chốt & Cần tránh \\
+\midrule
+Lần mua gần nhất và nhịp mua & Số ngày từ lần mua gần nhất, số giỏ và số ngày mua trước mốc & Không dùng dữ liệu của 7 ngày tương lai. \\
+Quy mô mua và giá trị & Số dòng sản phẩm, doanh số \texttt{SALES\_VALUE} & Không cộng \texttt{QUANTITY} giữa các nhóm hàng. \\
+Hộ xuất hiện ở các thời điểm khác nhau & Thời gian kể từ lần đầu thấy hộ trong dữ liệu & Không coi đó là tuổi thực của khách hàng. \\
+Giảm giá, nhiên liệu, thông tin hộ & So các hộ có nhịp mua tương tự; xem độ phủ và thời điểm có dữ liệu & Không suy ra quan hệ nhân quả hay khả năng dự báo chỉ từ EDA. \\
+\bottomrule
+\end{tabularx}
+\vspace{3mm}
+\src{Notebook phân tích dữ liệu, mục 12; các biến này chỉ là ứng viên, cần kiểm tra ở bước xây dựng mô hình.}
+\end{frame}
+
+% Kết thúc phần Data Understanding
+\begin{frame}{Kết luận: đã hiểu dữ liệu, còn gì cần thận trọng?}
+\begin{columns}[T,onlytextwidth]
+\column{.49\textwidth}
+\textbf{Đã xác lập}\vspace{2mm}
+\begin{itemize}
+\item Đã xác định mỗi dòng của tám bảng thể hiện gì và nối chúng ra sao.
+\item Mua hàng nghĩa là có bất kỳ giỏ nào trong 7 ngày tiếp theo.
+\item Lần mua gần nhất và nhịp mua có liên hệ rõ với việc mua tiếp.
+\item Khi so nhóm nhiên liệu, giảm giá hay thông tin hộ, cần xét cả mức hoạt động.
+\end{itemize}
+\column{.48\textwidth}
+\textbf{Giới hạn cần mang sang bước tiếp theo}\vspace{2mm}
+\begin{itemize}
+\item Chưa rõ đơn vị của \texttt{QUANTITY} ở mọi nhóm hàng.
+\item Chưa biết ngày lịch và nguyên nhân ít giao dịch ở ngày 278, 643.
+\item Chưa biết từ khi nào dữ liệu chiến dịch và thông tin hộ có sẵn.
+\item Một hộ xuất hiện nhiều mốc; tỷ lệ theo lượt quan sát không phải tỷ lệ theo số hộ.
 \end{itemize}
 \end{columns}
-\vspace{2mm}\src{Dữ liệu local: \texttt{sample\_data/dunnhumby}; audit: \texttt{artifacts/propensity\_v2/data\_understanding};
-\href{https://www.dunnhumby.com/source-files/}{mô tả nguồn chính thức}.}
+\vspace{2mm}\src{Notebook \texttt{phan\_tich\_du\_lieu\_propensity.ipynb}; EDA hoàn thành trong phạm vi dữ liệu hiện có.}
 \end{frame}
 
 % Phụ lục: tên field và ví dụ được kiểm tra trên 8 CSV local.
@@ -389,35 +572,35 @@ Các bảng bổ sung bối cảnh mua sắm ở nhiều cấp độ; dữ liệ
 \begin{frame}{Phụ lục A1: Giao dịch — khóa và thời gian}
 \small\renewcommand{\arraystretch}{1.18}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{3.3cm}X}
-\toprule Field & Định nghĩa và cách đọc \\
+\toprule Cột & Cách hiểu \\
 \midrule
-household\_key & Mã định danh household có giao dịch. \\
-BASKET\_ID & Mã basket/giao dịch; nhiều dòng sản phẩm có thể cùng một basket. \\
-DAY & Chỉ số ngày tương đối trong dữ liệu; không phải ngày lịch đã xác nhận. \\
-PRODUCT\_ID & Mã sản phẩm trên dòng giao dịch; dùng nối với bảng product. \\
+household\_key & Mã hộ gia đình có giao dịch. \\
+BASKET\_ID & Mã giỏ hàng; nhiều dòng sản phẩm có thể cùng mã này. \\
+DAY & Số thứ tự ngày trong dữ liệu; chưa xác định được ngày lịch tương ứng. \\
+PRODUCT\_ID & Mã sản phẩm trên dòng giao dịch; dùng nối với bảng sản phẩm. \\
 STORE\_ID & Mã cửa hàng ghi nhận giao dịch. \\
 TRANS\_TIME & Giờ giao dịch dạng số HHMM; ví dụ 1631 là 16:31. \\
 WEEK\_NO & Chỉ số tuần của giao dịch; không tự suy diễn là tuần lịch. \\
 \bottomrule
 \end{tabularx}
-\vspace{2mm}\src{Grain: một dòng sản phẩm trong basket; audit local: 2.595.732 dòng.}
+\vspace{2mm}\src{Mỗi dòng là một sản phẩm trong giỏ hàng; bảng giao dịch có 2.595.732 dòng.}
 \end{frame}
 
 % 22
 \begin{frame}{Phụ lục A2: Giao dịch — số lượng và giá trị}
 \small\renewcommand{\arraystretch}{1.12}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{4.0cm}X}
-\toprule Field & Định nghĩa và ý nghĩa phân tích \\
+\toprule Cột & Cách hiểu và lưu ý \\
 \midrule
-QUANTITY & Lượng sản phẩm mua trong chuyến mua; đơn vị riêng của fuel chưa được nêu trong user guide. \\
-SALES\_VALUE & Số tiền retailer nhận được từ dòng sản phẩm; không nhất thiết bằng số tiền khách trả. \\
+QUANTITY & Lượng sản phẩm mua; tài liệu chưa nêu rõ đơn vị riêng của nhiên liệu. \\
+SALES\_VALUE & Số tiền nhà bán lẻ nhận được từ dòng sản phẩm; có thể khác số tiền khách trả. \\
 RETAIL\_DISC & Giá trị điều chỉnh/chiết khấu bán lẻ; thường mang dấu âm trong dữ liệu. \\
 COUPON\_DISC & Giá trị điều chỉnh/chiết khấu coupon được ghi nhận trên dòng. \\
 COUPON\_MATCH\_DISC & Giá trị điều chỉnh coupon matching được ghi nhận trên dòng. \\
 \bottomrule
 \end{tabularx}
 \vspace{1mm}\begin{block}{Cơ sở định nghĩa}
-User guide phân biệt số tiền retailer nhận được và số tiền khách trả khi sử dụng manufacturer coupon.
+Tài liệu nguồn phân biệt số tiền nhà bán lẻ nhận được và số tiền khách trả khi dùng phiếu giảm giá của nhà sản xuất.
 \end{block}
 \src{The Complete Journey User Guide, trang 3.}
 \end{frame}
@@ -426,12 +609,12 @@ User guide phân biệt số tiền retailer nhận được và số tiền kh�
 \begin{frame}{Phụ lục B: Từ điển trường dữ liệu sản phẩm}
 \small\renewcommand{\arraystretch}{1.16}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{4.4cm}X}
-\toprule Field & Định nghĩa và cách đọc \\
+\toprule Cột & Cách hiểu \\
 \midrule
-PRODUCT\_ID & Mã sản phẩm; khóa nối với transaction và coupon. \\
-MANUFACTURER & Mã nhà sản xuất được cung cấp trong catalog. \\
-DEPARTMENT & Nhóm hàng cấp department; ví dụ GROCERY, PRODUCE. \\
-BRAND & Phân loại nhãn hàng; trong dữ liệu có National và Private. \\
+PRODUCT\_ID & Mã sản phẩm; dùng nối với giao dịch và phiếu giảm giá. \\
+MANUFACTURER & Mã nhà sản xuất trong danh mục sản phẩm. \\
+DEPARTMENT & Nhóm hàng lớn, ví dụ GROCERY và PRODUCE. \\
+BRAND & Loại nhãn hàng: của nhà sản xuất (National) hoặc nhãn riêng (Private). \\
 COMMODITY\_DESC & Mô tả nhóm hàng ở cấp commodity. \\
 SUB\_COMMODITY\_DESC & Mô tả nhóm hàng chi tiết hơn dưới commodity. \\
 CURR\_SIZE\_OF\_PRODUCT & Mô tả quy cách/kích cỡ sản phẩm; ví dụ \texttt{22 LB}. \\
@@ -444,9 +627,9 @@ CURR\_SIZE\_OF\_PRODUCT & Mô tả quy cách/kích cỡ sản phẩm; ví dụ \
 \begin{frame}{Phụ lục C: Từ điển trường dữ liệu nhân khẩu học}
 \scriptsize\renewcommand{\arraystretch}{1.15}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{4.2cm}X}
-\toprule Field & Nội dung nhìn thấy trong file local \\
+\toprule Cột & Giá trị và cách hiểu từ dữ liệu hiện có \\
 \midrule
-household\_key & Mã household; khóa nối với transaction. \\
+household\_key & Mã hộ gia đình; dùng nối với giao dịch. \\
 classification\_1 & Nhóm được mã hóa bằng nhãn \texttt{Age Group1}--\texttt{Age Group6}. \\
 classification\_2 & Nhóm phân loại mã hóa; các giá trị gồm \texttt{X}, \texttt{Y}, \texttt{Z}. \\
 classification\_3 & Nhóm phân loại mã hóa bằng các nhãn \texttt{Level}. \\
@@ -456,22 +639,22 @@ HOMEOWNER\_DESC & Nhãn mô tả tình trạng nhà ở/sở hữu nhà, có gi�
 KID\_CATEGORY\_DESC & Nhãn nhóm trẻ em trong hộ, gồm \texttt{None/Unknown}. \\
 \bottomrule
 \end{tabularx}
-\vspace{1mm}\src{801 household; không tự gán nghĩa cho các mã classification khi chưa có data dictionary.}
+\vspace{1mm}\src{Chỉ 801 hộ có hồ sơ; chưa gán nghĩa cụ thể cho các mã classification khi thiếu tài liệu giải thích.}
 \end{frame}
 
 % 25
 \begin{frame}{Phụ lục D: Từ điển trường phân bổ chiến dịch}
 \small\renewcommand{\arraystretch}{1.3}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
-\toprule Field & Định nghĩa và cách đọc \\
+\toprule Cột & Cách hiểu \\
 \midrule
-DESCRIPTION & Nhãn loại campaign trong bảng, ví dụ \texttt{TypeA}. \\
-household\_key & Mã household được liên kết với campaign. \\
-CAMPAIGN & Mã campaign; nối với \texttt{campaign\_desc}. \\
+DESCRIPTION & Loại chiến dịch ghi trong bảng, ví dụ \texttt{TypeA}. \\
+household\_key & Mã hộ được gắn với chiến dịch. \\
+CAMPAIGN & Mã chiến dịch; dùng nối với \texttt{campaign\_desc}. \\
 \bottomrule
 \end{tabularx}
 \vspace{5mm}\begin{block}{Đơn vị quan sát}
-Một dòng biểu diễn liên kết household--campaign. Có assignment không chứng minh hộ đã nhận, mở hoặc tương tác với thông điệp.
+Mỗi dòng gắn một hộ với một chiến dịch. Điều đó chưa chứng minh hộ đã nhận, mở hoặc xem thông điệp.
 \end{block}
 \end{frame}
 
@@ -479,16 +662,16 @@ Một dòng biểu diễn liên kết household--campaign. Có assignment không
 \begin{frame}{Phụ lục E: Từ điển trường mô tả chiến dịch}
 \small\renewcommand{\arraystretch}{1.25}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
-\toprule Field & Định nghĩa và cách đọc \\
+\toprule Cột & Cách hiểu \\
 \midrule
-DESCRIPTION & Nhãn loại campaign, ví dụ \texttt{TypeB}. \\
-CAMPAIGN & Mã campaign; nối với campaign assignment hoặc redemption. \\
-START\_DAY & Chỉ số ngày bắt đầu campaign theo dữ liệu nguồn. \\
-END\_DAY & Chỉ số ngày kết thúc campaign theo dữ liệu nguồn. \\
+DESCRIPTION & Loại chiến dịch, ví dụ \texttt{TypeB}. \\
+CAMPAIGN & Mã chiến dịch; dùng nối với hộ được gắn chiến dịch hoặc lần dùng phiếu. \\
+START\_DAY & Số thứ tự ngày bắt đầu chiến dịch. \\
+END\_DAY & Số thứ tự ngày kết thúc chiến dịch. \\
 \bottomrule
 \end{tabularx}
 \vspace{5mm}\begin{block}{Ý nghĩa phân tích}
-Hai chỉ số ngày xác định khoảng hoạt động của chiến dịch và hỗ trợ đối chiếu thời điểm redemption.
+Hai cột ngày giúp xác định thời gian chiến dịch và kiểm tra ngày dùng phiếu có nằm trong khoảng này không.
 \end{block}
 \end{frame}
 
@@ -496,15 +679,15 @@ Hai chỉ số ngày xác định khoảng hoạt động của chiến dịch v
 \begin{frame}{Phụ lục F: Từ điển trường dữ liệu coupon}
 \small\renewcommand{\arraystretch}{1.3}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
-\toprule Field & Định nghĩa và cách đọc \\
+\toprule Cột & Cách hiểu \\
 \midrule
-COUPON\_UPC & Mã coupon; nối với sự kiện trong \texttt{coupon\_redempt}. \\
-PRODUCT\_ID & Mã sản phẩm được liên kết với coupon. \\
-CAMPAIGN & Mã campaign gắn với mapping coupon--product. \\
+COUPON\_UPC & Mã phiếu giảm giá; dùng nối với bảng ghi lần sử dụng. \\
+PRODUCT\_ID & Mã sản phẩm được gắn với phiếu. \\
+CAMPAIGN & Mã chiến dịch gắn với phiếu và sản phẩm. \\
 \bottomrule
 \end{tabularx}
 \vspace{5mm}\begin{block}{Đơn vị quan sát và kết quả kiểm tra}
-Bảng mô tả mapping coupon--product--campaign. Có 5.164 dòng trùng hoàn toàn trên ba cột.
+Mỗi dòng liên kết phiếu, sản phẩm và chiến dịch. Có 5.164 dòng giống hệt nhau trên cả ba cột.
 \end{block}
 \end{frame}
 
@@ -512,16 +695,16 @@ Bảng mô tả mapping coupon--product--campaign. Có 5.164 dòng trùng hoàn 
 \begin{frame}{Phụ lục G: Từ điển trường sử dụng coupon}
 \small\renewcommand{\arraystretch}{1.25}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
-\toprule Field & Định nghĩa và cách đọc \\
+\toprule Cột & Cách hiểu \\
 \midrule
-household\_key & Household có sự kiện redemption. \\
-DAY & Chỉ số ngày ghi nhận sự kiện sử dụng coupon. \\
-COUPON\_UPC & Mã coupon được sử dụng; nối với bảng coupon. \\
-CAMPAIGN & Mã campaign liên quan tới redemption. \\
+household\_key & Mã hộ đã sử dụng phiếu giảm giá. \\
+DAY & Số thứ tự ngày ghi nhận lần sử dụng phiếu. \\
+COUPON\_UPC & Mã phiếu đã dùng; dùng nối với bảng phiếu giảm giá. \\
+CAMPAIGN & Mã chiến dịch liên quan đến lần dùng phiếu. \\
 \bottomrule
 \end{tabularx}
 \vspace{5mm}\begin{block}{Đơn vị quan sát}
-Một dòng mô tả sự kiện sử dụng coupon của household trong một campaign, tại một ngày được ghi nhận.
+Mỗi dòng ghi một lần hộ sử dụng phiếu trong một chiến dịch vào một ngày được ghi nhận.
 \end{block}
 \end{frame}
 
@@ -529,17 +712,17 @@ Một dòng mô tả sự kiện sử dụng coupon của household trong một 
 \begin{frame}{Phụ lục H: Từ điển trường trưng bày và mailer}
 \small\renewcommand{\arraystretch}{1.23}
 \begin{tabularx}{\textwidth}{>{\ttfamily}p{3.5cm}X}
-\toprule Field & Định nghĩa và cách đọc \\
+\toprule Cột & Cách hiểu \\
 \midrule
-PRODUCT\_ID & Mã sản phẩm trong bản ghi trưng bày/marketing. \\
+PRODUCT\_ID & Mã sản phẩm trong bản ghi trưng bày hoặc gửi quảng cáo. \\
 STORE\_ID & Mã cửa hàng của bản ghi. \\
 WEEK\_NO & Chỉ số tuần của bản ghi. \\
-display & Mã trưng bày tại cửa hàng; cần bảng giải mã từ nguồn. \\
-mailer & Mã mailer; cần bảng giải mã từ nguồn. \\
+display & Mã hình thức trưng bày tại cửa hàng; chưa có bảng giải mã. \\
+mailer & Mã hình thức gửi quảng cáo; chưa có bảng giải mã. \\
 \bottomrule
 \end{tabularx}
 \vspace{3mm}\begin{block}{Đơn vị quan sát}
-Bản ghi kết hợp sản phẩm, cửa hàng và tuần; các mã mô tả hình thức trưng bày và mailer.
+Mỗi dòng gắn một sản phẩm với một cửa hàng và một tuần, kèm mã trưng bày và gửi quảng cáo.
 \end{block}
 \src{36.786.524 dòng local; diễn giải mã display/mailer cần tài liệu gốc.}
 \end{frame}
