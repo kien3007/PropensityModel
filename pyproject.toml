@@ -3,36 +3,45 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "propensity-vsf"
-version = "2.0.0"
-description = "Management-ready, point-in-time household purchase propensity with CRISP-DM"
+name = "propensity-enterprise"
+version = "3.0.0"
+description = "Enterprise Lambda Architecture for Household Purchase Propensity (On-Premise to Cloud)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "joblib>=1.3",
-    "matplotlib>=3.7",
-    "numpy>=1.24",
-    "pandas>=2.0",
-    "pyarrow>=14.0",
-    "scikit-learn>=1.3",
-    "seaborn>=0.12",
+    "duckdb>=1.1",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "redis>=5.0.0",
+    "minio>=7.2.0",
+    "psycopg2-binary>=2.9.9",
+    "lightgbm>=4.0",
+    "scikit-learn>=1.3.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "pyarrow>=14.0.0",
+    "joblib>=1.3.0",
+    "pyyaml>=6.0.1",
+    "requests>=2.31.0",
 ]
 
 [project.optional-dependencies]
-dev = ["ipython>=8.0", "pytest>=8.0", "ruff>=0.4"]
-modeling = ["lightgbm>=4.7,<5"]
-hpo = ["optuna>=5,<6"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "httpx>=0.27.0",
+    "ruff>=0.4",
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/propensity_v2"]
+packages = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["."]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py310"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "W", "B", "UP"]

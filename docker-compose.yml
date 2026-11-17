@@ -1,0 +1,144 @@
+version: "3.8"
+
+services:
+  # ============================================================================
+  # 1. OLTP Database (PostgreSQL 16)
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: propensity_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: propensity_oltp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_secure_pwd
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d propensity_oltp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # 2. Master Dataset Object Store (MinIO S3 Compatible)
+  # ============================================================================
+  minio:
+    image: minio/minio:RELEASE.2024-03-30T09-41-56Z
+    container_name: propensity_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Bucket Initializer for MinIO
+  minio-init:
+    image: minio/mc:latest
+    container_name: propensity_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb --ignore-existing myminio/lakehouse-master;
+      /usr/bin/mc mb --ignore-existing myminio/lakehouse-bronze;
+      /usr/bin/mc mb --ignore-existing myminio/mlflow-artifacts;
+      exit 0;
+      "
+
+  # ============================================================================
+  # 3. Speed & Serving Layer Cache (Redis 7)
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: propensity_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ============================================================================
+  # 4. Serving Layer: FastAPI Unified Fusion Gateway
+  # ============================================================================
+  serving-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.serving
+    container_name: propensity_serving_api
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=propensity_oltp
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres_secure_pwd
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - LAKEHOUSE_PATH=/app/data/lakehouse/propensity_warehouse.duckdb
+      - MODEL_PATH=/app/models/champion_model.joblib
+    ports:
+      - "8000:8000"
+    volumes:
+      - lakehouse_data:/app/data/lakehouse
+
+  # ============================================================================
+  # 5. Batch Layer: Weekly Batch Scoring & Pipeline Runner
+  # ============================================================================
+  batch-pipeline:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pipeline
+    container_name: propensity_batch_pipeline
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - LAKEHOUSE_PATH=/app/data/lakehouse/propensity_warehouse.duckdb
+      - MODEL_PATH=/app/models/champion_model.joblib
+    volumes:
+      - lakehouse_data:/app/data/lakehouse
+    profiles:
+      - tools # Only runs on demand: docker compose --profile tools run batch-pipeline
+
+volumes:
+  postgres_data:
+  minio_data:
+  redis_data:
+  lakehouse_data:

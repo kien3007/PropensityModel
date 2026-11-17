@@ -1,0 +1,24 @@
+# ==============================================================================
+# Production Dockerfile for Batch Scoring & Data Transformation Pipeline
+# ==============================================================================
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir .
+
+COPY src/ ./src/
+COPY models/ ./models/
+COPY sample_data/ ./sample_data/
+
+ENV PYTHONPATH=/app
+
+CMD ["python", "-m", "src.pipelines.batch_pipeline", "--cutoff", "711"]

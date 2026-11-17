@@ -1,0 +1,65 @@
+{
+  "promoted_at": "20261117_150330",
+  "bundle_name": "28 multi-domain (projectphase3)",
+  "prediction_window_days": 14,
+  "features": [
+    "days_since_last_basket",
+    "days_since_last_perishable",
+    "median_inter_trip",
+    "std_inter_trip",
+    "urgency_ratio",
+    "baskets_count_14d",
+    "baskets_count_30d",
+    "baskets_count_60d",
+    "baskets_count_90d",
+    "baskets_count_180d",
+    "frequency_momentum_30_vs_90",
+    "spend_30d",
+    "spend_90d",
+    "spend_180d",
+    "aov_90d",
+    "avg_items_per_basket_90d",
+    "perishable_basket_ratio_90d",
+    "is_targeted_by_active_campaign",
+    "coupon_redemption_count_180d",
+    "primary_store_id",
+    "store_loyalty_index",
+    "classification_1",
+    "classification_2",
+    "classification_3",
+    "HOMEOWNER_DESC",
+    "classification_4",
+    "classification_5",
+    "KID_CATEGORY_DESC"
+  ],
+  "categorical_features": [
+    "classification_1",
+    "classification_2",
+    "classification_3",
+    "HOMEOWNER_DESC",
+    "classification_4",
+    "classification_5",
+    "KID_CATEGORY_DESC"
+  ],
+  "metrics": {
+    "roc_auc": 0.860045,
+    "pr_auc": 0.934806,
+    "brier_score": 0.13628,
+    "log_loss": 0.418397,
+    "ece": 0.017141,
+    "top_decile_lift": 1.4143,
+    "decile_1_response_rate": 0.992,
+    "base_rate": 0.7014,
+    "test_sample_size": 5000
+  },
+  "fit_cutoffs": [
+    200, 230, 260, 290, 320, 350, 380, 410, 440, 470, 500
+  ],
+  "val_cutoffs": [
+    530, 560, 590
+  ],
+  "test_cutoffs": [
+    650, 680
+  ],
+  "source_project": "C:\\Users\\kienn\\projectphase3"
+}
