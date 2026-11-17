@@ -26,14 +26,17 @@ class SpeedLayerProcessor:
         self._init_redis()
 
     def _init_redis(self) -> None:
+        host = settings.REDIS_HOST
+        if host in ("localhost", "0.0.0.0"):
+            host = "127.0.0.1"
         try:
             r = redis.Redis(
-                host=settings.REDIS_HOST,
+                host=host,
                 port=settings.REDIS_PORT,
                 db=settings.REDIS_DB,
                 password=settings.REDIS_PASSWORD,
                 decode_responses=True,
-                socket_timeout=1.0,
+                socket_timeout=0.5,
             )
             r.ping()
             self.redis_client = r

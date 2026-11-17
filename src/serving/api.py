@@ -15,11 +15,13 @@ from src.config.settings import settings
 from src.monitoring.metrics import (
     PROPENSITY_REQUESTS_TOTAL,
     generate_prometheus_payload,
+    record_model_routing,
     record_prediction,
     record_speed_event,
     update_model_info_gauge,
 )
 from src.serving.fusion_engine import LambdaFusionEngine
+from src.speed_layer.kafka_bus import KafkaEventProducer
 
 logger = logging.getLogger("ServingAPI")
 
@@ -29,14 +31,21 @@ app = FastAPI(
     version="3.0.0",
 )
 
-# Global Fusion Engine singleton
+# Global Singletons
 fusion_engine = LambdaFusionEngine()
+kafka_producer = KafkaEventProducer(fallback_processor=fusion_engine.speed_processor)
 update_model_info_gauge(fusion_engine.predictor.bundle_name, len(fusion_engine.predictor.features))
 
 
 # --- Pydantic Schemas ---
 class PredictRequest(BaseModel):
     household_key: int = Field(..., ge=1, le=2500, description="Household ID (1 to 2500)")
+
+
+class CanaryConfigRequest(BaseModel):
+    challenger_ratio: float = Field(..., ge=0.0, le=1.0, description="Fraction of traffic (0.0 to 1.0) to route to Challenger")
+    enabled: Optional[bool] = True
+    challenger_model_path: Optional[str] = None
 
 
 class StreamingEvent(BaseModel):
@@ -55,6 +64,7 @@ class PropensityResponse(BaseModel):
     marketing_action: str
     intraday_delta: Dict[str, Any]
     applied_fusion_rules: List[str]
+    model_variant: Optional[str] = "champion"
 
 
 # --- Endpoints ---
@@ -80,6 +90,7 @@ def predict_propensity(req: PredictRequest) -> Dict[str, Any]:
     try:
         result = fusion_engine.get_unified_propensity(req.household_key)
         latency = time.perf_counter() - start_t
+        variant = result.get("model_variant", "champion")
         record_prediction(
             latency_seconds=latency,
             score=result["unified_propensity"],
@@ -87,6 +98,7 @@ def predict_propensity(req: PredictRequest) -> Dict[str, Any]:
             urgency_tier=result["urgency_tier"],
             rules=result.get("applied_fusion_rules", []),
         )
+        record_model_routing(variant)
         PROPENSITY_REQUESTS_TOTAL.labels(endpoint="/v1/predict/propensity", status="200").inc()
         return result
     except Exception as e:
@@ -99,22 +111,43 @@ def predict_propensity(req: PredictRequest) -> Dict[str, Any]:
 def ingest_streaming_event(event: StreamingEvent) -> Dict[str, Any]:
     """
     Ingests an intraday event into the Speed Layer (POS checkout, coupon clip, app open).
-    Updates real-time delta state in Redis.
+    Dispatches to Kafka Event Bus with zero-downtime direct Redis fallback.
     """
     try:
-        delta = fusion_engine.speed_processor.process_event(event.model_dump())
+        dispatch = kafka_producer.publish_event(event.model_dump())
         record_speed_event(event.event_type)
         PROPENSITY_REQUESTS_TOTAL.labels(endpoint="/v1/speed/event", status="202").inc()
         return {
             "status": "ACCEPTED",
             "household_key": event.household_key,
             "event_type": event.event_type,
-            "updated_delta": delta,
+            "dispatch": dispatch,
+            "updated_delta": dispatch.get("updated_delta") or fusion_engine.speed_processor.get_delta(event.household_key),
         }
     except Exception as e:
         PROPENSITY_REQUESTS_TOTAL.labels(endpoint="/v1/speed/event", status="500").inc()
         logger.error(f"Event ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/canary/config")
+def get_canary_config() -> Dict[str, Any]:
+    """Returns current A/B Canary routing configuration and split percentages."""
+    return fusion_engine.router.get_status()
+
+
+@app.post("/v1/canary/config")
+def set_canary_config(config: CanaryConfigRequest) -> Dict[str, Any]:
+    """Dynamically updates A/B Canary traffic ratio and Challenger model path."""
+    if config.challenger_model_path:
+        loaded = fusion_engine.router.load_challenger(config.challenger_model_path)
+        if not loaded:
+            raise HTTPException(status_code=400, detail=f"Failed to load challenger model from {config.challenger_model_path}")
+
+    return fusion_engine.router.set_traffic_split(
+        challenger_ratio=config.challenger_ratio,
+        enabled=config.enabled,
+    )
 
 
 @app.get("/v1/batch/scores")

@@ -11,6 +11,7 @@ import pytest
 from src.scheduler.daemon import MLSystemScheduler, ScheduledTask
 from dags.dag_weekly_batch_propensity import dag as weekly_dag
 from dags.dag_monthly_model_retraining import dag as monthly_dag
+from dags.dag_ground_truth_feedback_loop import dag as feedback_dag
 
 
 def test_scheduled_task_interval_trigger():
@@ -83,11 +84,12 @@ def test_scheduled_task_time_matching():
 
 def test_ml_system_scheduler_registration():
     scheduler = MLSystemScheduler()
-    # Should have 3 default jobs
+    # Should have 4 default jobs
     names = [t.name for t in scheduler.tasks]
     assert "weekly_batch_scoring" in names
     assert "monthly_model_retraining" in names
     assert "daily_data_quality_audit" in names
+    assert "ground_truth_feedback_loop" in names
 
 
 def test_trigger_serving_hot_reload():
@@ -104,12 +106,14 @@ def test_scheduler_mocked_execution():
     # Mock the internal methods to verify run_once_all behavior
     with patch.object(scheduler, "job_weekly_batch", return_value={"status": "scored"}), \
          patch.object(scheduler, "job_monthly_retraining", return_value={"status": "trained"}), \
-         patch.object(scheduler, "job_daily_data_quality", return_value={"status": "PASS"}):
+         patch.object(scheduler, "job_daily_data_quality", return_value={"status": "PASS"}), \
+         patch.object(scheduler, "job_ground_truth_feedback", return_value={"status": "attributed"}):
 
         results = scheduler.run_once_all()
         assert results["weekly_batch_scoring"]["status"] == "SUCCESS"
         assert results["monthly_model_retraining"]["status"] == "SUCCESS"
         assert results["daily_data_quality_audit"]["status"] == "SUCCESS"
+        assert results["ground_truth_feedback_loop"]["status"] == "SUCCESS"
 
 
 def test_airflow_dags_structure():
@@ -120,3 +124,7 @@ def test_airflow_dags_structure():
     # Verify monthly retraining DAG configuration
     assert monthly_dag.dag_id == "monthly_propensity_model_retraining"
     assert monthly_dag.schedule_interval == "0 3 1 * *"
+
+    # Verify ground-truth feedback loop DAG configuration
+    assert feedback_dag.dag_id == "weekly_ground_truth_feedback_loop"
+    assert feedback_dag.schedule_interval == "0 4 * * 3"

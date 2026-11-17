@@ -71,6 +71,17 @@ PROPENSITY_ACTIVE_MODEL_INFO = Gauge(
     ["bundle_name", "feature_count"],
 )
 
+PROPENSITY_MODEL_ROUTING_TOTAL = Counter(
+    "propensity_model_routing_total",
+    "Total predictions broken down by A/B Canary model variant",
+    ["variant"],
+)
+
+
+def record_model_routing(variant: str) -> None:
+    """Records routing to champion or challenger."""
+    PROPENSITY_MODEL_ROUTING_TOTAL.labels(variant=variant).inc()
+
 
 def record_prediction(
     latency_seconds: float,

@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from src.models.predictor import PropensityPredictor
+from src.serving.canary_router import CanaryRouter
 from src.speed_layer.delta_stream import SpeedLayerProcessor
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class LambdaFusionEngine:
     """
-    Implements the Serving Layer Fusion function:
+    Implements the Serving Layer Fusion function with A/B Canary Routing:
     P_final = Merge(BatchView[h], RealTimeDelta[h])
     """
 
@@ -24,14 +25,17 @@ class LambdaFusionEngine:
         self,
         predictor: Optional[PropensityPredictor] = None,
         speed_processor: Optional[SpeedLayerProcessor] = None,
+        canary_router: Optional[CanaryRouter] = None,
     ) -> None:
         self.predictor = predictor or PropensityPredictor()
         self.speed_processor = speed_processor or SpeedLayerProcessor()
+        self.router = canary_router or CanaryRouter(champion_predictor=self.predictor)
         self._batch_cache: Dict[int, Dict[str, Any]] = {}
 
     def reload_predictor(self) -> None:
         """Hot-reloads champion model in serving gateway."""
         self.predictor.reload()
+        self.router.champion = self.predictor
 
     def set_batch_cache(self, batch_df: pd.DataFrame) -> None:
         """
@@ -54,6 +58,9 @@ class LambdaFusionEngine:
         Computes unified real-time propensity score:
         Merges precomputed batch baseline with live speed layer delta.
         """
+        # 0. Route request via Canary Router (Champion vs Challenger)
+        predictor, variant = self.router.route(household_key)
+
         # 1. Fetch precomputed Batch View
         batch_view = self._batch_cache.get(
             household_key,
@@ -105,4 +112,5 @@ class LambdaFusionEngine:
             "marketing_action": action,
             "intraday_delta": delta,
             "applied_fusion_rules": applied_rules,
+            "model_variant": variant,
         }

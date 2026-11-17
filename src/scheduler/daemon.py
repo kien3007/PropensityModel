@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from src.config.settings import settings
 from src.lakehouse.engine import LakehouseEngine
+from src.monitoring.feedback_loop import GroundTruthFeedbackLoop
 from src.pipelines.batch_pipeline import run_batch_pipeline
 from src.pipelines.train_pipeline import run_training_pipeline
 
@@ -146,6 +147,18 @@ class MLSystemScheduler:
             )
         )
 
+        # 4. Weekly Ground-Truth Feedback Loop: Every Wednesday at 04:00 AM UTC
+        self.register_task(
+            ScheduledTask(
+                name="ground_truth_feedback_loop",
+                func=lambda: self.job_ground_truth_feedback(),
+                cron_type="weekly",
+                target_hour=4,
+                target_minute=0,
+                target_weekday=2,  # Wednesday
+            )
+        )
+
     def register_task(self, task: ScheduledTask) -> None:
         self.tasks.append(task)
         logger.info(f"Registered scheduled task: '{task.name}' (type: {task.cron_type})")
@@ -186,6 +199,17 @@ class MLSystemScheduler:
         else:
             logger.info("Data Quality Audit PASSED: 2,500 active households verified, zero negative anomalies.")
         return dq
+
+    def job_ground_truth_feedback(self) -> Dict[str, Any]:
+        """Runs prospective realized accuracy attribution joining past predictions to actuals."""
+        logger.info("Executing Weekly Ground-Truth Feedback Attribution Job...")
+        loop = GroundTruthFeedbackLoop()
+        summary = loop.run_weekly_feedback(cutoff_day=704, horizon_days=7)
+        logger.info(
+            f"Ground-Truth Feedback completed. ROC-AUC: {summary.get('realized_roc_auc', 0):.4f}, "
+            f"Top Decile Lift: {summary.get('top_decile_lift', 0):.2f}x"
+        )
+        return summary
 
     def trigger_serving_hot_reload(self) -> bool:
         """Sends HTTP POST /v1/models/reload to Serving Gateway."""
@@ -241,7 +265,7 @@ class MLSystemScheduler:
 def main():
     parser = argparse.ArgumentParser(description="Propensity ML System Automated Scheduler Daemon")
     parser.add_argument("--run-once-all", action="store_true", help="Execute all tasks immediately once and exit")
-    parser.add_argument("--run-job", type=str, choices=["batch", "retrain", "dq"], help="Execute single job and exit")
+    parser.add_argument("--run-job", type=str, choices=["batch", "retrain", "dq", "feedback"], help="Execute single job and exit")
     parser.add_argument("--poll-interval", type=int, default=30, help="Polling interval in seconds (default: 30)")
     parser.add_argument("--serving-url", type=str, default=None, help="Serving API URL for hot-reload")
     args = parser.parse_args()
@@ -265,6 +289,8 @@ def main():
             scheduler.job_monthly_retraining()
         elif args.run_job == "dq":
             scheduler.job_daily_data_quality()
+        elif args.run_job == "feedback":
+            scheduler.job_ground_truth_feedback()
         return
 
     scheduler.start_loop(poll_interval_seconds=args.poll_interval)

@@ -2,6 +2,7 @@
 Monitoring, Drift Detection & Observability Package.
 """
 from src.monitoring.drift_detector import DataDriftDetector
+from src.monitoring.feedback_loop import GroundTruthFeedbackLoop
 from src.monitoring.metrics import (
     generate_prometheus_payload,
     record_drift_metrics,
@@ -12,6 +13,7 @@ from src.monitoring.metrics import (
 
 __all__ = [
     "DataDriftDetector",
+    "GroundTruthFeedbackLoop",
     "record_prediction",
     "record_speed_event",
     "record_drift_metrics",

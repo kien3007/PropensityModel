@@ -207,6 +207,52 @@ services:
     depends_on:
       - prometheus
 
+  # ============================================================================
+  # 9. Streaming Message Bus (Apache Kafka KRaft Mode - Zero Zookeeper)
+  # ============================================================================
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: propensity_kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  # ============================================================================
+  # 10. Kafka Stream Worker: Background Event Consumer to Redis
+  # ============================================================================
+  kafka-consumer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pipeline
+    container_name: propensity_kafka_consumer
+    restart: unless-stopped
+    command: ["python", "-m", "src.speed_layer.kafka_bus", "--mode", "consumer"]
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      - ENV=production
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
 volumes:
   postgres_data:
   minio_data:
@@ -214,3 +260,4 @@ volumes:
   lakehouse_data:
   prometheus_data:
   grafana_data:
+  kafka_data:

@@ -45,5 +45,11 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = None
     REDIS_TTL_SECONDS: int = 86400  # 24 Hours
 
+    # Streaming Event Bus (Kafka)
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    KAFKA_TOPIC_EVENTS: str = "pos-intraday-events"
+    KAFKA_CONSUMER_GROUP: str = "propensity-speed-consumer-group"
+    KAFKA_ENABLED: bool = True
+
 
 settings = Settings()
