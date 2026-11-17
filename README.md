@@ -74,6 +74,10 @@ PropensityVSF/
 │   └── architecture/
 │       ├── LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md  # Master architectural specification
 │       └── lambda_architecture.excalidraw          # Interactive Excalidraw visual diagram
+├── feature_repo/
+│   ├── feature_store.yaml          # Feast Feature Store configuration (Offline Parquet + Online Store)
+│   ├── entities.py                 # Feast Entity definitions (household_key)
+│   └── features.py                 # 28 Multi-domain Point-in-Time FeatureView definitions
 ├── models/
 │   ├── champion_model.joblib       # Active Champion LightGBM bundle (28 features, Isotonic calibrated, AUC: 0.8600)
 │   ├── latest_model_manifest.json  # Manifest with metrics, validation scores & cutoffs
@@ -87,6 +91,8 @@ PropensityVSF/
 │   │   └── pit_extractor.py        # Point-in-Time feature extractor (strictly DAY <= t0)
 │   ├── lakehouse/
 │   │   └── engine.py               # DuckDB Parquet Medallion Lakehouse & DQ Framework
+│   ├── feature_store/
+│   │   └── client.py               # Feast FeatureStoreClient (PIT retrieval & online materialization)
 │   ├── models/
 │   │   └── predictor.py            # Champion model predictor, decile & urgency assignment
 │   ├── pipelines/
@@ -106,6 +112,7 @@ PropensityVSF/
 │       ├── evaluator.py            # Metrics (ROC-AUC, Brier score, Log loss, Lift@10%)
 │       └── model_registry.py       # Champion/Challenger quality gates & model bundle packager
 └── tests/
+    ├── test_feature_store.py       # Feast Feature Store (registry, online materialization & PIT retrieval)
     ├── test_features_pit.py        # Point-in-Time leakage & feature boundary tests
     ├── test_lakehouse.py           # Bronze/Silver/Gold Lakehouse & Data Quality tests
     ├── test_lambda_fusion.py       # Lambda Serving fusion rules unit tests
@@ -283,12 +290,13 @@ python -m pytest tests/ -v
 ```
 
 **Test Coverage Summary:**
-1. `tests/test_features_pit.py`: Validates strictly $DAY \le t_0$, zero future leakage, and correct feature computation across 2,500 households.
-2. `tests/test_lakehouse.py`: Validates Bronze Parquet conversion, Silver star schema views, Gold marts, and automated Data Quality assertions.
-3. `tests/test_lambda_fusion.py`: Validates the mathematical rules of the Serving Layer (intraday dampening, coupon intent surge, app nudge).
-4. `tests/test_scheduler.py`: Validates `ScheduledTask` triggers (interval, daily, weekly, monthly), scheduler execution, and Apache Airflow DAG structures.
-5. `tests/test_serving_api.py`: Validates all FastAPI endpoints (`/health`, `/v1/predict/propensity`, `/v1/speed/event`, `/v1/batch/scores`, `/v1/metrics`, `/v1/models/champion`, `/v1/models/reload`).
-6. `tests/test_training_pipeline.py`: Validates dataset building, target prospective labeling, LightGBM training, Platt calibration, evaluation metrics, and Model Registry governance quality gates.
+1. `tests/test_feature_store.py`: Validates Feast Feature Store registration, Online Store materialization, and Point-in-Time historical feature retrieval.
+2. `tests/test_features_pit.py`: Validates strictly $DAY \le t_0$, zero future leakage, and correct feature computation across 2,500 households.
+3. `tests/test_lakehouse.py`: Validates Bronze Parquet conversion, Silver star schema views, Gold marts, and automated Data Quality assertions.
+4. `tests/test_lambda_fusion.py`: Validates the mathematical rules of the Serving Layer (intraday dampening, coupon intent surge, app nudge).
+5. `tests/test_scheduler.py`: Validates `ScheduledTask` triggers (interval, daily, weekly, monthly), scheduler execution, and Apache Airflow DAG structures.
+6. `tests/test_serving_api.py`: Validates all FastAPI endpoints (`/health`, `/v1/predict/propensity`, `/v1/speed/event`, `/v1/batch/scores`, `/v1/metrics`, `/v1/models/champion`, `/v1/models/reload`).
+7. `tests/test_training_pipeline.py`: Validates dataset building, target prospective labeling, LightGBM training, Platt calibration, evaluation metrics, and Model Registry governance quality gates.
 
 ---
 

@@ -27,6 +27,8 @@ ENV/
 # Data and Models
 data/
 sample_data/
+feature_repo/data/
+*.db
 *.duckdb
 *.duckdb.wal
 !models/champion_model.joblib
