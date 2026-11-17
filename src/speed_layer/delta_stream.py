@@ -61,7 +61,7 @@ class SpeedLayerProcessor:
 
         if event_type == "pos_checkout":
             delta["intraday_trips_detected"] = 1
-            delta["intraday_spend"] += float(event.get("sales_value", 0.0))
+            delta["intraday_spend"] += max(0.0, float(event.get("sales_value", 0.0)))
         elif event_type == "coupon_clip":
             delta["intraday_coupons_clipped"] += 1
         elif event_type == "app_open":
