@@ -112,7 +112,7 @@ services:
       - lakehouse_data:/app/data/lakehouse
 
   # ============================================================================
-  # 5. Batch Layer: Weekly Batch Scoring & Pipeline Runner
+  # 5. Batch Layer: Weekly Batch Scoring & Pipeline Runner (On-Demand)
   # ============================================================================
   batch-pipeline:
     build:
@@ -136,6 +136,40 @@ services:
       - lakehouse_data:/app/data/lakehouse
     profiles:
       - tools # Only runs on demand: docker compose --profile tools run batch-pipeline
+
+  # ============================================================================
+  # 6. Automated Scheduler: Cron Daemon for Weekly Batch & Monthly Retraining
+  # ============================================================================
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pipeline
+    container_name: propensity_scheduler
+    restart: unless-stopped
+    command: ["python", "-m", "src.scheduler.daemon", "--poll-interval", "30", "--serving-url", "http://serving-api:8000"]
+    depends_on:
+      - serving-api
+      - postgres
+      - minio
+      - redis
+    environment:
+      - ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=propensity_oltp
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres_secure_pwd
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - LAKEHOUSE_PATH=/app/data/lakehouse/propensity_warehouse.duckdb
+      - MODEL_PATH=/app/models/champion_model.joblib
+    volumes:
+      - lakehouse_data:/app/data/lakehouse
+      - ./models:/app/models
+      - ./output:/app/output
 
 volumes:
   postgres_data:

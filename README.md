@@ -67,6 +67,9 @@ PropensityVSF/
 │   ├── Dockerfile.serving          # Multi-stage production container for FastAPI Serving
 │   ├── Dockerfile.pipeline         # Container for Lakehouse ETL, training & batch scoring
 │   └── minio_init.sh               # MinIO S3 bucket provisioning script
+├── dags/
+│   ├── dag_weekly_batch_propensity.py    # Apache Airflow / Cloud Composer DAG for weekly batch scoring
+│   └── dag_monthly_model_retraining.py  # Apache Airflow DAG for monthly retraining & hot-reload
 ├── docs/
 │   └── architecture/
 │       ├── LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md  # Master architectural specification
@@ -89,6 +92,8 @@ PropensityVSF/
 │   ├── pipelines/
 │   │   ├── batch_pipeline.py       # Weekly batch scoring pipeline runner
 │   │   └── train_pipeline.py       # Automated Retraining & Model Promotion pipeline runner
+│   ├── scheduler/
+│   │   └── daemon.py               # Automated Scheduler Daemon (zero-dependency cron orchestrator)
 │   ├── serving/
 │   │   ├── api.py                  # FastAPI REST microservice endpoints
 │   │   └── fusion_engine.py        # Lambda Serving Fusion Engine (P_batch + Delta_speed)
@@ -104,6 +109,7 @@ PropensityVSF/
     ├── test_features_pit.py        # Point-in-Time leakage & feature boundary tests
     ├── test_lakehouse.py           # Bronze/Silver/Gold Lakehouse & Data Quality tests
     ├── test_lambda_fusion.py       # Lambda Serving fusion rules unit tests
+    ├── test_scheduler.py           # Scheduler daemon, triggers & Airflow DAGs tests
     ├── test_serving_api.py         # FastAPI REST endpoint & hot-reload integration tests
     └── test_training_pipeline.py   # Training, calibration, evaluator & registry gate tests
 ```
@@ -151,7 +157,41 @@ uvicorn src.serving.api:app --host 0.0.0.0 --port 8000 --reload
 
 ---
 
-## 4. REST API Reference
+## 4. Automated Scheduling & Production Orchestration
+
+The platform provides dual-track scheduling designed for both standalone on-premise execution and managed cloud environments (Google Cloud Composer / AWS MWAA):
+
+| Pipeline Job | Production Schedule | Orchestration Target | Description |
+|---|---|---|---|
+| **Weekly Batch Scoring** | Every Monday at 02:00 UTC (`0 2 * * 1`) | `src.pipelines.batch_pipeline` | Ingests new POS data, extracts 28 Point-in-Time features, scores 2,500 households, updates Gold Lakehouse mart, exports CRM audience, and clears intraday deltas. |
+| **Monthly Model Retraining** | 1st of month at 03:00 UTC (`0 3 1 * *`) | `src.pipelines.train_pipeline` | Builds multi-cutoff temporal training data, retrains LightGBM candidate, evaluates governance quality gates (ROC-AUC $\ge$ 0.85, Lift $\ge$ 1.30x), registers champion, and calls webhook to hot-reload serving. |
+| **Daily Data Quality Audit** | Every day at 01:00 UTC (`0 1 * * *`) | `LakehouseEngine.run_data_quality_framework` | Verifies row counts, checks for negative pricing/quantity anomalies, validates temporal bounds, and ensures schema conformity. |
+
+### Track 1: Lightweight Scheduler Daemon (On-Premise / Docker Compose)
+Implemented with zero external dependencies in `src.scheduler.daemon.py`. Integrated directly into `docker-compose.yml` under the `scheduler` service:
+
+```bash
+# Run scheduler daemon locally (polls every 30s)
+python -m src.scheduler.daemon --poll-interval 30 --serving-url http://localhost:8000
+
+# Execute all jobs immediately once (smoke testing / verification)
+python -m src.scheduler.daemon --run-once-all
+
+# Execute a single on-demand job (batch | retrain | dq)
+python -m src.scheduler.daemon --run-job batch
+
+# Launch within Docker Compose
+docker compose up -d scheduler
+```
+
+### Track 2: Enterprise Apache Airflow / Google Cloud Composer DAGs
+Production-ready Airflow DAGs located in `dags/` featuring automatic retry policies, XCom parameter passing, and cross-platform fallbacks:
+- `dags/dag_weekly_batch_propensity.py`: Orchestrates weekly batch scoring, Lakehouse sync, and marketing segment materialization.
+- `dags/dag_monthly_model_retraining.py`: Orchestrates model retraining, governance verification, and calls `POST /v1/models/reload` on the FastAPI Serving Gateway for **zero-downtime hot-reloading** of the model bundle in memory.
+
+---
+
+## 5. REST API Reference
 
 The Serving API provides low-latency inference fusing weekly batch scores with intraday streaming deltas:
 
@@ -233,9 +273,9 @@ curl -X GET "http://localhost:8000/v1/batch/scores?decile=10&limit=50"
 
 ---
 
-## 5. Automated Testing & Verification
+## 6. Automated Testing & Verification
 
-The test suite validates data quality, point-in-time leakage prevention, speed-batch fusion logic, and API endpoints:
+The test suite validates data quality, point-in-time leakage prevention, speed-batch fusion logic, scheduler triggers, Airflow DAGs, and API endpoints:
 
 ```bash
 # Run complete test suite
@@ -246,12 +286,13 @@ python -m pytest tests/ -v
 1. `tests/test_features_pit.py`: Validates strictly $DAY \le t_0$, zero future leakage, and correct feature computation across 2,500 households.
 2. `tests/test_lakehouse.py`: Validates Bronze Parquet conversion, Silver star schema views, Gold marts, and automated Data Quality assertions.
 3. `tests/test_lambda_fusion.py`: Validates the mathematical rules of the Serving Layer (intraday dampening, coupon intent surge, app nudge).
-4. `tests/test_serving_api.py`: Validates all FastAPI endpoints (`/health`, `/v1/predict/propensity`, `/v1/speed/event`, `/v1/batch/scores`, `/v1/metrics`, `/v1/models/champion`, `/v1/models/reload`).
-5. `tests/test_training_pipeline.py`: Validates dataset building, target prospective labeling, LightGBM training, Platt calibration, evaluation metrics, and Model Registry governance quality gates.
+4. `tests/test_scheduler.py`: Validates `ScheduledTask` triggers (interval, daily, weekly, monthly), scheduler execution, and Apache Airflow DAG structures.
+5. `tests/test_serving_api.py`: Validates all FastAPI endpoints (`/health`, `/v1/predict/propensity`, `/v1/speed/event`, `/v1/batch/scores`, `/v1/metrics`, `/v1/models/champion`, `/v1/models/reload`).
+6. `tests/test_training_pipeline.py`: Validates dataset building, target prospective labeling, LightGBM training, Platt calibration, evaluation metrics, and Model Registry governance quality gates.
 
 ---
 
-## 6. Zero-Downtime Cloud Migration Strategy
+## 7. Zero-Downtime Cloud Migration Strategy
 
 The system is designed with strict storage and compute decoupling, enabling a phased, zero-downtime migration to GCP or AWS:
 
@@ -267,5 +308,5 @@ For complete rollback criteria, data validation checks, and operational runbooks
 
 ---
 
-## 7. License
+## 8. License
 Proprietary & Confidential - Built for Enterprise Household Purchase Propensity Scoring.
