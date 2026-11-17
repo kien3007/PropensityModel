@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "propensity-serving-api"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["serving-api:8000"]

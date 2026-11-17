@@ -6,11 +6,19 @@ and precomputed batch scores.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from src.config.settings import settings
+from src.monitoring.metrics import (
+    PROPENSITY_REQUESTS_TOTAL,
+    generate_prometheus_payload,
+    record_prediction,
+    record_speed_event,
+    update_model_info_gauge,
+)
 from src.serving.fusion_engine import LambdaFusionEngine
 
 logger = logging.getLogger("ServingAPI")
@@ -23,6 +31,7 @@ app = FastAPI(
 
 # Global Fusion Engine singleton
 fusion_engine = LambdaFusionEngine()
+update_model_info_gauge(fusion_engine.predictor.bundle_name, len(fusion_engine.predictor.features))
 
 
 # --- Pydantic Schemas ---
@@ -67,9 +76,21 @@ def predict_propensity(req: PredictRequest) -> Dict[str, Any]:
     Returns real-time unified propensity score for a household.
     Fuses batch baseline with live intraday speed deltas.
     """
+    start_t = time.perf_counter()
     try:
-        return fusion_engine.get_unified_propensity(req.household_key)
+        result = fusion_engine.get_unified_propensity(req.household_key)
+        latency = time.perf_counter() - start_t
+        record_prediction(
+            latency_seconds=latency,
+            score=result["unified_propensity"],
+            decile=result["decile"],
+            urgency_tier=result["urgency_tier"],
+            rules=result.get("applied_fusion_rules", []),
+        )
+        PROPENSITY_REQUESTS_TOTAL.labels(endpoint="/v1/predict/propensity", status="200").inc()
+        return result
     except Exception as e:
+        PROPENSITY_REQUESTS_TOTAL.labels(endpoint="/v1/predict/propensity", status="500").inc()
         logger.error(f"Prediction failed for household {req.household_key}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -82,6 +103,8 @@ def ingest_streaming_event(event: StreamingEvent) -> Dict[str, Any]:
     """
     try:
         delta = fusion_engine.speed_processor.process_event(event.model_dump())
+        record_speed_event(event.event_type)
+        PROPENSITY_REQUESTS_TOTAL.labels(endpoint="/v1/speed/event", status="202").inc()
         return {
             "status": "ACCEPTED",
             "household_key": event.household_key,
@@ -89,6 +112,7 @@ def ingest_streaming_event(event: StreamingEvent) -> Dict[str, Any]:
             "updated_delta": delta,
         }
     except Exception as e:
+        PROPENSITY_REQUESTS_TOTAL.labels(endpoint="/v1/speed/event", status="500").inc()
         logger.error(f"Event ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -113,6 +137,12 @@ def get_batch_scores(decile: Optional[int] = None, limit: int = 50) -> Dict[str,
         "returned": len(records),
         "scores": records,
     }
+
+
+@app.get("/metrics")
+def prometheus_metrics() -> Response:
+    """Exposes real-time Prometheus scrapable metrics."""
+    return Response(content=generate_prometheus_payload(), media_type="text/plain")
 
 
 @app.get("/v1/metrics")
@@ -148,6 +178,7 @@ def reload_champion_model() -> Dict[str, Any]:
     try:
         fusion_engine.reload_predictor()
         pred = fusion_engine.predictor
+        update_model_info_gauge(pred.bundle_name, len(pred.features))
         return {
             "status": "RELOADED",
             "active_bundle": pred.bundle_name,

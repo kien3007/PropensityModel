@@ -66,6 +66,8 @@ PropensityVSF/
 ├── docker/
 │   ├── Dockerfile.serving          # Multi-stage production container for FastAPI Serving
 │   ├── Dockerfile.pipeline         # Container for Lakehouse ETL, training & batch scoring
+│   ├── prometheus.yml              # Prometheus scraping configuration (Serving API /metrics)
+│   ├── grafana/                    # Grafana pre-provisioned data sources & MLOps dashboards
 │   └── minio_init.sh               # MinIO S3 bucket provisioning script
 ├── dags/
 │   ├── dag_weekly_batch_propensity.py    # Apache Airflow / Cloud Composer DAG for weekly batch scoring
@@ -95,6 +97,9 @@ PropensityVSF/
 │   │   └── client.py               # Feast FeatureStoreClient (PIT retrieval & online materialization)
 │   ├── models/
 │   │   └── predictor.py            # Champion model predictor, decile & urgency assignment
+│   ├── monitoring/
+│   │   ├── drift_detector.py       # DataDriftDetector (PSI, KS-test, Covariate shift audit)
+│   │   └── metrics.py              # Prometheus instrumentation (P50/P95/P99 latency, RPS, Deciles, PSI)
 │   ├── pipelines/
 │   │   ├── batch_pipeline.py       # Weekly batch scoring pipeline runner
 │   │   └── train_pipeline.py       # Automated Retraining & Model Promotion pipeline runner
@@ -116,6 +121,7 @@ PropensityVSF/
     ├── test_features_pit.py        # Point-in-Time leakage & feature boundary tests
     ├── test_lakehouse.py           # Bronze/Silver/Gold Lakehouse & Data Quality tests
     ├── test_lambda_fusion.py       # Lambda Serving fusion rules unit tests
+    ├── test_monitoring.py          # Data Drift (PSI, KS-test) & Prometheus metrics tests
     ├── test_scheduler.py           # Scheduler daemon, triggers & Airflow DAGs tests
     ├── test_serving_api.py         # FastAPI REST endpoint & hot-reload integration tests
     └── test_training_pipeline.py   # Training, calibration, evaluator & registry gate tests
@@ -142,6 +148,8 @@ docker compose ps
 
 Service URLs:
 - **FastAPI Serving API**: [http://localhost:8000](http://localhost:8000) (Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs))
+- **Prometheus Metrics Engine**: [http://localhost:9090](http://localhost:9090) (Scrapes `http://localhost:8000/metrics`)
+- **Grafana MLOps Dashboard**: [http://localhost:3000](http://localhost:3000) (User: `admin` / `admin` - Pre-configured live dashboard)
 - **MinIO S3 Console**: [http://localhost:9001](http://localhost:9001) (User: `minioadmin` / `minioadmin`)
 - **PostgreSQL OLTP**: `localhost:5432` (`propensity_oltp`)
 - **Redis Cache**: `localhost:6379`
@@ -294,9 +302,10 @@ python -m pytest tests/ -v
 2. `tests/test_features_pit.py`: Validates strictly $DAY \le t_0$, zero future leakage, and correct feature computation across 2,500 households.
 3. `tests/test_lakehouse.py`: Validates Bronze Parquet conversion, Silver star schema views, Gold marts, and automated Data Quality assertions.
 4. `tests/test_lambda_fusion.py`: Validates the mathematical rules of the Serving Layer (intraday dampening, coupon intent surge, app nudge).
-5. `tests/test_scheduler.py`: Validates `ScheduledTask` triggers (interval, daily, weekly, monthly), scheduler execution, and Apache Airflow DAG structures.
-6. `tests/test_serving_api.py`: Validates all FastAPI endpoints (`/health`, `/v1/predict/propensity`, `/v1/speed/event`, `/v1/batch/scores`, `/v1/metrics`, `/v1/models/champion`, `/v1/models/reload`).
-7. `tests/test_training_pipeline.py`: Validates dataset building, target prospective labeling, LightGBM training, Platt calibration, evaluation metrics, and Model Registry governance quality gates.
+5. `tests/test_monitoring.py`: Validates Model & Data Drift Monitor (numerical PSI, categorical PSI, two-sample KS-test, drift reports) and Prometheus metrics exporter.
+6. `tests/test_scheduler.py`: Validates `ScheduledTask` triggers (interval, daily, weekly, monthly), scheduler execution, and Apache Airflow DAG structures.
+7. `tests/test_serving_api.py`: Validates all FastAPI endpoints (`/health`, `/metrics`, `/v1/predict/propensity`, `/v1/speed/event`, `/v1/batch/scores`, `/v1/metrics`, `/v1/models/champion`, `/v1/models/reload`).
+8. `tests/test_training_pipeline.py`: Validates dataset building, target prospective labeling, LightGBM training, Platt calibration, evaluation metrics, and Model Registry governance quality gates.
 
 ---
 

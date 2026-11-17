@@ -17,6 +17,8 @@ from src.config.settings import settings
 from src.features.pit_extractor import PointInTimeFeatureExtractor
 from src.lakehouse.engine import LakehouseEngine
 from src.models.predictor import PropensityPredictor
+from src.monitoring.drift_detector import DataDriftDetector
+from src.monitoring.metrics import record_drift_metrics
 from src.speed_layer.delta_stream import SpeedLayerProcessor
 
 logger = logging.getLogger("BatchPipeline")
@@ -87,7 +89,31 @@ def run_batch_pipeline(
     crm_cols = ["household_key", "purchase_probability", "rank", "decile", "urgency_tier", "marketing_action"]
     scores_df[crm_cols].to_csv(crm_csv_path, index=False)
 
-    # 6. Reset Speed Layer Intraday Deltas for fresh cycle
+    # 6. Evaluate Model & Data Drift against Gold Baseline
+    drift_summary = None
+    gold_snapshot_file = settings.BASE_DIR / "data" / "lakehouse" / "gold" / "fct_household_features_snapshot.parquet"
+    if gold_snapshot_file.exists():
+        try:
+            ref_snapshot = pd.read_parquet(gold_snapshot_file)
+            detector = DataDriftDetector(output_dir=out_dir / "reports")
+            drift_report = detector.generate_full_drift_audit(
+                reference_df=ref_snapshot,
+                current_df=snapshot,
+                current_scores=scores_df["purchase_probability"].to_numpy(),
+                run_id=f"DRIFT_{run_id}",
+            )
+            psi_dict = {f: details["psi"] for f, details in drift_report["feature_details"].items()}
+            record_drift_metrics(psi_dict)
+            drift_summary = {
+                "status": drift_report["overall_status"],
+                "drift_ratio": drift_report["feature_drift_summary"]["drift_ratio"],
+                "requires_retraining": drift_report["requires_retraining"],
+            }
+            logger.info(f"Drift Audit: {drift_summary['status']} (Requires Retrain={drift_summary['requires_retraining']})")
+        except Exception as e:
+            logger.warning(f"Drift Audit could not complete: {e}")
+
+    # 7. Reset Speed Layer Intraday Deltas for fresh cycle
     speed_proc = SpeedLayerProcessor()
     speed_proc.reset_intraday_deltas()
 
@@ -104,6 +130,7 @@ def run_batch_pipeline(
         "top_decile_count": int((scores_df["decile"] == 10).sum()),
         "urgent_count": int((scores_df["urgency_tier"] == "URGENT").sum()),
         "lakehouse_records_saved": records_saved,
+        "drift_audit": drift_summary,
         "duration_seconds": round(duration, 2),
         "artifacts": {
             "parquet": str(parquet_path),
