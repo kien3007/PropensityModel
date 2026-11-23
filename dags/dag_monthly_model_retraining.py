@@ -60,8 +60,18 @@ def task_train_and_evaluate(**kwargs) -> Dict[str, Any]:
 
     logger.info("Starting automated model retraining pipeline...")
     # Target, splits and hyper-parameters come from src/config/model_config.py.
+    # Automated runs never override the gate: force_promote is a manual, audited action.
     summary = run_training_pipeline(force_promote=False)
     test_metrics = summary["test_metrics"]
+    gate = summary["governance_gate"]
+    if not gate["passed"]:
+        failed_quality = [k for k, c in gate["quality"]["checks"].items() if not c["pass"]]
+        comparison = gate["champion_comparison"]
+        logger.warning(
+            f"Candidate blocked. Failed quality checks: {failed_quality or 'none'}; "
+            f"champion comparison: {comparison['status']} "
+            f"(dAUC CI95={comparison.get('auc_delta_ci95')}, reason={comparison.get('reason')})"
+        )
     logger.info(
         f"Retraining finished. Promoted: {summary['promoted']}. "
         f"OOT test ROC-AUC: {test_metrics['roc_auc']:.4f}, "

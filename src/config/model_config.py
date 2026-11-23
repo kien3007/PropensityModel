@@ -13,11 +13,29 @@ from typing import Any, Dict, Tuple
 
 @dataclass(frozen=True)
 class GateConfig:
-    """Absolute quality thresholds a candidate must meet on the out-of-time test set."""
+    """
+    Promotion gate, evaluated on the out-of-time test split.
 
+    Quality checks are base-rate relative so they stay meaningful when the horizon or
+    target changes (at a 70% base rate, raw lift@10% cannot exceed 1/0.70 = 1.43).
+    Reference points on the 14-day champion test set (base rate 0.70):
+      champion:     AUC 0.860, BSS 0.35, normalized lift 0.98, PR-AUC gain 0.77, ECE 0.019
+      recency rule: AUC 0.789, BSS < 0,  normalized lift 0.70, PR-AUC gain 0.56
+    """
+
+    # 1. Absolute quality (candidate alone)
     min_auc: float = 0.75
-    max_brier: float = 0.20
-    min_lift_10: float = 1.50
+    min_brier_skill: float = 0.20      # 1 - Brier / Brier(base-rate forecast)
+    min_normalized_lift_10: float = 0.85  # (lift@10% - 1) / (max attainable lift - 1)
+    min_pr_auc_gain: float = 0.60      # (PR-AUC - base rate) / (1 - base rate)
+    max_ece: float = 0.03
+
+    # 2. Champion / Challenger non-inferiority on identical test rows: promote only if
+    #    the lower bound of the 95% household-bootstrap CI of AUC(challenger) - AUC(champion)
+    #    is >= -non_inferiority_margin_auc.
+    non_inferiority_margin_auc: float = 0.005
+    bootstrap_samples: int = 1000
+    bootstrap_seed: int = 42
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,6 @@
 # Kế hoạch hoàn thiện PropensityVSF
 
-> Ngày lập: 2026-11-23 · Trạng thái: Phase 0 và Phase 1 đã hoàn thành (2026-11-23); Phase 2–7 chưa làm
+> Ngày lập: 2026-11-23 · Trạng thái: Phase 0, 1 và 2 đã hoàn thành (2026-11-23); Phase 3–7 chưa làm
 
 ## Bối cảnh
 
@@ -50,8 +50,25 @@
 - Bundle schema v2 lưu: feature set, horizon, các cutoff, fingerprint dữ liệu, git SHA, phương pháp calibration.
 - Predictor từ chối bundle không khớp contract hoặc không khai báo horizon.
 
-### Phát hiện mới (đầu vào cho Phase 2–3)
-- Gate hiện tại **không thể đạt**: lift@10% tối đa của tập test là 1.426, trong khi ngưỡng là 1.50. Pipeline vì vậy không tự promote (đúng với thiết kế hiện tại) và việc này được chuyển sang Phase 2.
+### Phase 2: đã xong
+- Gate chất lượng tính tương đối theo base rate ([model_config.py](../src/config/model_config.py) `GateConfig`). Kết quả trên tập test thật:
+
+  | Tiêu chí | Ngưỡng | Ứng viên | Luật recency |
+  |---|---|---|---|
+  | ROC-AUC | ≥ 0.75 | 0.859 | 0.789 |
+  | Brier skill score | ≥ 0.20 | 0.347 | −0.87 |
+  | Lift chuẩn hoá (lift−1)/(lift_max−1) | ≥ 0.85 | 0.980 | 0.697 |
+  | PR-AUC gain (PR-AUC−base)/(1−base) | ≥ 0.60 | 0.768 | 0.557 |
+  | ECE | ≤ 0.03 | 0.019 | 0.444 |
+
+- So sánh với champion trên cùng các dòng test ([champion_challenger.py](../src/training/champion_challenger.py)), bootstrap ghép cặp, lấy mẫu lại theo hộ ([statistics.py](../src/training/statistics.py)). Điều kiện promote: cận dưới khoảng tin cậy 95% của ΔAUC ≥ −0.005. Với dữ liệu thật: ΔAUC = −0.0003, CI [−0.0015, +0.0010], nên ứng viên được coi là không kém hơn.
+- Nếu champion có target khác (horizon hoặc feature set khác) thì hai model **không so sánh được**, và việc promote bị chặn, trừ khi dùng `force_promote`.
+- Promote theo kiểu atomic (ghi file tạm rồi rename). Mọi champion đều được lưu ở `models/history/`, có audit log `promotions.jsonl`. Champion cũ (chưa có trong registry) được tự động lưu lại trước khi bị thay. Rollback bằng `python -m scripts.registry rollback [--to VERSION]`.
+- DAG hằng tháng không bao giờ dùng `force_promote`, và log rõ tiêu chí nào chặn việc promote.
+- **Chưa promote champion mới:** ứng viên đã qua gate, nhưng tôi chạy với `--no-promote` để không thay file `models/champion_model.joblib` đang được track trong git. Lần chạy retrain tự động đầu tiên (hoặc chạy `python -m src.pipelines.train_pipeline`) sẽ promote nó, và champion cũ được lưu vào history.
+
+### Phát hiện mới (đầu vào cho Phase 3)
+- Gate cũ **không thể đạt**: lift@10% tối đa của tập test là 1.426, trong khi ngưỡng là 1.50. Đã sửa ở Phase 2.
 - Logistic regression trên feature số đạt AUC 0.8556, chỉ kém LightGBM (0.8593) 0.004. Luật recency đơn giản đạt AUC 0.789. Điều này củng cố Phase 3: bài toán hiện tại gần như đã bão hoà.
 - Calibration gần như không cải thiện: ECE trên test là 0.0189 (thô) so với 0.0193 (isotonic).
 - Tier `URGENT` trước đây đọc feature cũ `cadence_recency_ratio` (không tồn tại với model 28 feature, nên luôn bằng 0). Giờ đã đọc `urgency_ratio`. Ở cutoff 711 có 1.430 hộ được gắn `URGENT`.

@@ -17,7 +17,6 @@ from src.pipelines.train_pipeline import run_training_pipeline
 from src.training.calibrator import IsotonicCalibrator, PlattCalibrator, select_calibrator
 from src.training.dataset_builder import DatasetBuilder
 from src.training.evaluator import ModelEvaluator, expected_calibration_error
-from src.training.model_registry import ModelRegistry
 
 
 def test_labels_use_strict_future_window(synthetic_data):
@@ -80,12 +79,6 @@ def test_evaluator_reports_lift_ceiling():
     assert {"roc_auc", "pr_auc", "brier_score", "ece", "top_decile_lift"} <= set(m)
 
 
-def test_governance_gate(tmp_path):
-    registry = ModelRegistry(registry_dir=tmp_path)
-    assert registry.evaluate_governance_gate({"roc_auc": 0.85, "brier_score": 0.16, "lift_at_10pct": 1.8})["passed"]
-    assert not registry.evaluate_governance_gate({"roc_auc": 0.6, "brier_score": 0.25, "lift_at_10pct": 1.1})["passed"]
-
-
 def test_end_to_end_training_and_promotion(synthetic_data, small_training_config, tmp_path):
     registry_dir = tmp_path / "registry"
     summary = run_training_pipeline(
@@ -122,9 +115,7 @@ def test_end_to_end_training_and_promotion(synthetic_data, small_training_config
 
 
 def test_gate_failure_blocks_promotion(synthetic_data, small_training_config, tmp_path):
-    strict = small_training_config.with_overrides(
-        gate=type(small_training_config.gate)(min_auc=0.999, max_brier=0.0, min_lift_10=99.0)
-    )
+    strict = small_training_config.with_overrides(gate=type(small_training_config.gate)(min_auc=0.999))
     summary = run_training_pipeline(
         config=strict, data=synthetic_data, output_dir=tmp_path / "out", registry_dir=tmp_path / "registry",
     )

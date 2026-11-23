@@ -59,6 +59,16 @@ class ModelEvaluator:
             "sample_size": int(len(y_t)),
         }
         metrics["top_decile_lift"] = metrics["lift_at_10pct"]
+
+        # Base-rate-relative versions, comparable across horizons / target definitions:
+        #   brier_skill_score  = 1 - Brier / Brier(constant base-rate forecast)
+        #   normalized_lift_10 = (lift - 1) / (max attainable lift - 1)
+        #   pr_auc_gain        = (PR-AUC - base rate) / (1 - base rate)
+        ref_brier = base_rate * (1.0 - base_rate)
+        metrics["brier_skill_score"] = round(1.0 - metrics["brier_score"] / ref_brier, 6) if ref_brier > 0 else 0.0
+        headroom = metrics["max_attainable_lift_10"] - 1.0
+        metrics["normalized_lift_10"] = round((lift_10 - 1.0) / headroom, 6) if headroom > 0 else 0.0
+        metrics["pr_auc_gain"] = round((metrics["pr_auc"] - base_rate) / (1.0 - base_rate), 6) if base_rate < 1 else 0.0
         logger.info(
             f"Evaluation: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, "
             f"Brier={metrics['brier_score']:.4f}, ECE={metrics['ece']:.4f}, "

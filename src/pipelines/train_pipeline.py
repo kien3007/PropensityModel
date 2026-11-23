@@ -5,6 +5,9 @@ End-to-End Retraining Pipeline.
   -> LightGBM with early stopping on val -> calibrator chosen on val (cross-fitted ECE)
   -> out-of-time evaluation on test -> governance gate -> bundle (+ optional promotion)
 
+Governance gate = quality checks (base-rate relative, src/config/model_config.GateConfig)
+AND non-inferiority versus the active champion on the same test rows.
+
 Every run writes a candidate bundle and a JSON manifest to `output_dir`, whether or not
 it is promoted, so any run can be inspected or compared against the champion later.
 """
@@ -23,6 +26,7 @@ from src.data.loader import DataLoader, RawDataBundle
 from src.features.contract import CATEGORICAL_FEATURES, FEATURE_SET_VERSION, MODEL_FEATURES
 from src.features.pit_extractor import MultiDomainFeatureBuilder
 from src.training.calibrator import select_calibrator
+from src.training.champion_challenger import compare_with_champion
 from src.training.dataset_builder import DatasetBuilder
 from src.training.evaluator import ModelEvaluator
 from src.training.model_registry import ModelRegistry, build_bundle
@@ -104,12 +108,23 @@ def run_training_pipeline(
     )
     registry = ModelRegistry(registry_dir=registry_dir)
     candidate_path = registry.save_candidate(bundle, out_dir / "candidates")
-    gate = registry.evaluate_governance_gate(test_metrics, cfg.gate)
+    quality = registry.evaluate_governance_gate(test_metrics, cfg.gate)
+    comparison = compare_with_champion(
+        challenger_probs=calibrator.predict_proba(raw_test),
+        test_frame=test.frame,
+        champion_path=registry.champion_path,
+        config=cfg,
+    )
+    gate = {"passed": quality["passed"] and comparison["passed"], "quality": quality, "champion_comparison": comparison}
 
     should_promote = promote and (gate["passed"] or force_promote)
-    promoted_path = registry.register_and_promote(bundle) if should_promote else None
-    if promote and not should_promote:
-        logger.warning("Candidate NOT promoted: governance gate failed (use force_promote to override).")
+    promoted_path = None
+    if should_promote:
+        reason = "governance gate passed" if gate["passed"] else "force_promote override (gate failed)"
+        promoted_path = registry.register_and_promote(bundle, reason=reason)
+    elif promote:
+        blockers = [k for k in ("quality", "champion_comparison") if not gate[k]["passed"]]
+        logger.warning(f"Candidate NOT promoted: failed {blockers} (force_promote overrides).")
 
     fi_path = out_dir / "latest_feature_importances.csv"
     trainer.get_feature_importances(model).to_csv(fi_path, index=False)
