@@ -20,6 +20,7 @@ from src.config.settings import settings
 from src.lakehouse.engine import LakehouseEngine
 from src.monitoring.feedback_loop import GroundTruthFeedbackLoop
 from src.pipelines.batch_pipeline import run_batch_pipeline
+from src.config.model_config import TRAINING_CONFIGS
 from src.pipelines.train_pipeline import run_training_pipeline
 
 logger = logging.getLogger("SchedulerDaemon")
@@ -178,7 +179,10 @@ class MLSystemScheduler:
         """Runs retraining pipeline, checks governance gates, and triggers zero-downtime hot-reload."""
         logger.info("Executing Monthly Model Retraining Pipeline...")
         # Target, splits and hyper-parameters come from src/config/model_config.py.
-        summary = run_training_pipeline()
+        summary = run_training_pipeline(config=TRAINING_CONFIGS["purchase"])
+        lapse = run_training_pipeline(config=TRAINING_CONFIGS["lapse"])
+        logger.info(f"Lapse model retrained (promoted={lapse['promoted']}).")
+        summary["lapse"] = {k: lapse[k] for k in ("bundle_name", "promoted", "test_metrics")}
 
         if summary.get("promoted"):
             logger.info("Model promoted. Triggering Serving Gateway hot-reload via REST API...")

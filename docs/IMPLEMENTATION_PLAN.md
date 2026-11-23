@@ -1,6 +1,6 @@
 # Kế hoạch hoàn thiện PropensityVSF
 
-> Ngày lập: 2026-11-23 · Trạng thái: Phase 0, 1 và 2 đã hoàn thành (2026-11-23); Phase 3–7 chưa làm
+> Ngày lập: 2026-11-23 · Trạng thái: Phase 0–3 đã hoàn thành (2026-11-23); Phase 4–7 chưa làm
 
 ## Bối cảnh
 
@@ -66,6 +66,22 @@
 - Promote theo kiểu atomic (ghi file tạm rồi rename). Mọi champion đều được lưu ở `models/history/`, có audit log `promotions.jsonl`. Champion cũ (chưa có trong registry) được tự động lưu lại trước khi bị thay. Rollback bằng `python -m scripts.registry rollback [--to VERSION]`.
 - DAG hằng tháng không bao giờ dùng `force_promote`, và log rõ tiêu chí nào chặn việc promote.
 - **Chưa promote champion mới:** ứng viên đã qua gate, nhưng tôi chạy với `--no-promote` để không thay file `models/champion_model.joblib` đang được track trong git. Lần chạy retrain tự động đầu tiên (hoặc chạy `python -m src.pipelines.train_pipeline`) sẽ promote nó, và champion cũ được lưu vào history.
+
+### Phase 3: đã xong
+Chi tiết và số liệu đầy đủ nằm ở [analysis/TARGET_ANALYSIS.md](analysis/TARGET_ANALYSIS.md), sinh ra bằng lệnh `python -m scripts.target_analysis`.
+
+- **Phân tích target (3.1).** Base rate của target purchase là 0.33 / 0.53 / 0.68 / 0.80 ở horizon 3 / 7 / 14 / 28 ngày. Ở horizon 14 ngày, tần suất mua gần như quyết định nhãn: hộ có từ 20 basket trở lên trong 90 ngày thì 97% sẽ mua, hộ không có basket nào thì 12%.
+- **Target thứ hai là `lapse` (3.2)** ([targets.py](../src/features/targets.py)).
+  - Định nghĩa: hộ mua đều đặn (ít nhất 1 basket trong 30 ngày và ít nhất 4 basket trong 90 ngày) nhưng không mua gì trong 21 ngày tiếp theo.
+  - Base rate 0.106 trên khoảng 1.850 hộ đủ điều kiện.
+  - Gate riêng (`LAPSE_TRAINING_CONFIG`), ngưỡng được chốt *trước* khi train model đầu tiên.
+  - Champion đầu tiên ở `models/lapse/`: AUC 0.816, lift@10% 3.02 lần, ECE 0.010.
+  - Tái lập được (ΔAUC = 0). DAG hằng tháng và scheduler retrain cả hai target.
+- **Đánh giá theo năng lực vận hành (3.3).**
+  - Lapse: xếp hạng theo **p(lapse) × chi tiêu 90 ngày** giữ được số tiền gấp khoảng 2 lần so với xếp hạng chỉ theo p(lapse), và gấp 1.4–1.6 lần so với luật quá hạn. Batch xuất `lapse_risk_day_<cutoff>.csv` theo thứ hạng giá trị này: 186 hộ được gắn `RETENTION_OFFER` ở ngày 711.
+  - Purchase: mọi model đều chọn đúng nhóm khách hàng mua nhiều và đều đặn (precision khoảng 1.0). Chi tiêu của nhóm này không phải doanh thu tăng thêm.
+- **Lưu trữ EDA/CRISP-DM (3.4).** Notebook, tài liệu, slide và từ điển dữ liệu được khôi phục vào [analysis/archive_crisp_dm/](analysis/archive_crisp_dm/) từ commit `120ade9`. Không lấy `artifacts/`; các notebook không chạy lại được, nhưng vẫn xem được output đã lưu.
+- **Chưa đạt trọn tiêu chí nghiệm thu "hơn baseline có ý nghĩa".** Model vượt rõ luật heuristic và chọn ngẫu nhiên. Nhưng **logistic regression gần ngang LightGBM** ở cả hai target: lapse AUC 0.809 so với 0.816, purchase 0.856 so với 0.859; về giá trị tiền của target purchase, logistic regression còn tốt hơn. Cần giữ logistic regression làm baseline bắt buộc. Bước tiếp theo để chứng minh giá trị là thiết kế uplift / holdout.
 
 ### Phát hiện mới (đầu vào cho Phase 3)
 - Gate cũ **không thể đạt**: lift@10% tối đa của tập test là 1.426, trong khi ngưỡng là 1.50. Đã sửa ở Phase 2.

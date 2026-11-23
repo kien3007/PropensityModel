@@ -1,20 +1,22 @@
 """
 Champion registry CLI.
 
-    python -m scripts.registry list                       # archived versions (* = active)
-    python -m scripts.registry rollback [--to VERSION] [--reason TEXT]
+    python -m scripts.registry [--target purchase|lapse] list
+    python -m scripts.registry [--target purchase|lapse] rollback [--to VERSION] [--reason TEXT]
 """
 from __future__ import annotations
 
 import logging
 
-from src.training.model_registry import ModelRegistry
+from src.config.model_config import TRAINING_CONFIGS
+from src.training.model_registry import ModelRegistry, registry_dir_for
 
 
 def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Champion model registry")
+    parser.add_argument("--target", choices=sorted(TRAINING_CONFIGS), default="purchase")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="List archived versions (* = active champion)")
     rb = sub.add_parser("rollback", help="Re-activate a previous champion")
@@ -23,7 +25,7 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-    registry = ModelRegistry()
+    registry = ModelRegistry(registry_dir_for(TRAINING_CONFIGS[args.target]))
     if args.command == "list":
         current = registry.current_version()
         for v in registry.list_versions():

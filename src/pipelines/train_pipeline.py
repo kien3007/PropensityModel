@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from src.config.model_config import DEFAULT_TRAINING_CONFIG, TrainingConfig
+from src.config.model_config import DEFAULT_TRAINING_CONFIG, TRAINING_CONFIGS, TrainingConfig
 from src.config.settings import settings
 from src.data.loader import DataLoader, RawDataBundle
 from src.features.contract import CATEGORICAL_FEATURES, FEATURE_SET_VERSION, MODEL_FEATURES
@@ -29,7 +29,7 @@ from src.training.calibrator import select_calibrator
 from src.training.champion_challenger import compare_with_champion
 from src.training.dataset_builder import DatasetBuilder
 from src.training.evaluator import ModelEvaluator
-from src.training.model_registry import ModelRegistry, build_bundle
+from src.training.model_registry import ModelRegistry, build_bundle, registry_dir_for
 from src.training.trainer import ModelTrainer
 
 logger = logging.getLogger("TrainPipeline")
@@ -57,7 +57,8 @@ def run_training_pipeline(
     run_id = f"TRAIN_{start.strftime('%Y%m%d_%H%M%S')}"
     out_dir = Path(output_dir or settings.OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"=== Retraining {run_id}: horizon={cfg.horizon_days}d, fit={list(cfg.fit_cutoffs)}, "
+    logger.info(f"=== Retraining {run_id}: target={cfg.target}, horizon={cfg.horizon_days}d, "
+                f"fit={list(cfg.fit_cutoffs)}, "
                 f"val={list(cfg.val_cutoffs)}, test={list(cfg.test_cutoffs)} ===")
 
     # 1. Data & temporal splits
@@ -91,7 +92,8 @@ def run_training_pipeline(
     test_metrics_uncalibrated = ModelEvaluator.evaluate(test.y, raw_test)
     baseline = trainer.train_baseline_logistic(fit.X, fit.y)
     baseline_metrics = ModelEvaluator.evaluate(test.y, baseline.predict_proba(test.X[baseline.feature_names_])[:, 1])
-    recency_metrics = ModelEvaluator.evaluate(test.y, 1.0 / (1.0 + test.frame["days_since_last_basket"]))
+    recency_score = heuristic_score(test.frame, cfg.target)
+    recency_metrics = ModelEvaluator.evaluate(test.y, recency_score)
 
     # 5. Bundle, gate, promotion
     bundle = build_bundle(
@@ -106,7 +108,7 @@ def run_training_pipeline(
         best_iteration=best_iteration,
         calibration_report=calibration_report,
     )
-    registry = ModelRegistry(registry_dir=registry_dir)
+    registry = ModelRegistry(registry_dir=registry_dir or registry_dir_for(cfg))
     candidate_path = registry.save_candidate(bundle, out_dir / "candidates")
     quality = registry.evaluate_governance_gate(test_metrics, cfg.gate)
     comparison = compare_with_champion(
@@ -126,11 +128,20 @@ def run_training_pipeline(
         blockers = [k for k in ("quality", "champion_comparison") if not gate[k]["passed"]]
         logger.warning(f"Candidate NOT promoted: failed {blockers} (force_promote overrides).")
 
-    fi_path = out_dir / "latest_feature_importances.csv"
+    # Out-of-time predictions for downstream business evaluation (scripts/target_analysis.py).
+    predictions = test.frame[["household_key", "cutoff_day", "target"]].copy()
+    predictions["model_probability"] = calibrator.predict_proba(raw_test)
+    predictions["logistic_probability"] = baseline.predict_proba(test.X[baseline.feature_names_])[:, 1]
+    predictions["heuristic_score"] = recency_score.to_numpy()
+    predictions_path = out_dir / f"test_predictions_{cfg.target}_{run_id}.parquet"
+    predictions.to_parquet(predictions_path, index=False)
+
+    fi_path = out_dir / f"latest_feature_importances_{cfg.target}.csv"
     trainer.get_feature_importances(model).to_csv(fi_path, index=False)
 
     summary: Dict[str, Any] = {
         "run_id": run_id,
+        "target": cfg.target,
         "bundle_name": bundle["bundle_name"],
         "config": cfg.to_dict(),
         "data_source": raw.source,
@@ -150,6 +161,7 @@ def run_training_pipeline(
         "promoted_path": str(promoted_path) if promoted_path else None,
         "candidate_path": str(candidate_path),
         "feature_importances_path": str(fi_path),
+        "test_predictions_path": str(predictions_path),
         "duration_seconds": round((datetime.datetime.now() - start).total_seconds(), 2),
     }
     (out_dir / f"training_manifest_{run_id}.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
@@ -158,14 +170,24 @@ def run_training_pipeline(
     return summary
 
 
+def heuristic_score(frame, target: str):
+    """Rule-of-thumb baseline per target (higher = more likely positive)."""
+    if target == "lapse":
+        overdue = frame["urgency_ratio"]  # days since last basket / own median gap
+        return overdue / (1.0 + overdue)
+    return 1.0 / (1.0 + frame["days_since_last_basket"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the propensity retraining pipeline")
+    parser.add_argument("--target", choices=sorted(TRAINING_CONFIGS), default="purchase")
     parser.add_argument("--no-promote", action="store_true", help="Train and evaluate only; never touch the registry")
     parser.add_argument("--force-promote", action="store_true", help="Promote even if the governance gate fails")
     parser.add_argument("--data-source", choices=["lakehouse", "csv"], default=None)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     run_training_pipeline(
+        config=TRAINING_CONFIGS[args.target],
         data=DataLoader.load(args.data_source),
         promote=not args.no_promote,
         force_promote=args.force_promote,

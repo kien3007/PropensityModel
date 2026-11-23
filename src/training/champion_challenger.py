@@ -43,10 +43,12 @@ def compare_with_champion(
     except (ModelBundleError, FeatureContractError) as exc:
         return {"status": "incomparable", "passed": False, "reason": f"champion bundle unusable: {exc}"}
 
-    if champion.horizon_days != config.horizon_days or champion.feature_set_version != config.feature_set_version:
+    champion_def = (champion.target, champion.feature_set_version, champion.horizon_days)
+    challenger_def = (config.target, config.feature_set_version, config.horizon_days)
+    if champion_def != challenger_def:
         reason = (
-            f"target changed: champion ({champion.feature_set_version}, {champion.horizon_days}d) vs "
-            f"challenger ({config.feature_set_version}, {config.horizon_days}d); promote with force_promote"
+            f"target changed: champion {champion_def} vs challenger {challenger_def} "
+            "(target, feature set, horizon); promote with force_promote"
         )
         logger.warning(f"Champion comparison not possible: {reason}")
         return {"status": "incomparable", "passed": False, "reason": reason}

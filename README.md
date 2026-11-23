@@ -188,7 +188,14 @@ python -m src.pipelines.train_pipeline --no-promote
 # 2b. Check the active champion is reproducible from this repo (|dAUC| <= 0.01 on the OOT test cutoffs)
 python -m scripts.reproduce_champion
 
-# 3. Run the weekly batch scoring pipeline
+# 2c. Second model: 21-day lapse risk of regular shoppers (registry: models/lapse/)
+python -m src.pipelines.train_pipeline --target lapse
+python -m scripts.registry --target lapse list
+
+# 2d. Target & business-value analysis -> docs/analysis/TARGET_ANALYSIS.md
+python -m scripts.target_analysis
+
+# 3. Run the weekly batch scoring pipeline (also writes lapse_risk_day_<cutoff>.csv if a lapse champion exists)
 python -m src.pipelines.batch_pipeline --cutoff 711
 
 # 4. Start the FastAPI Serving Gateway

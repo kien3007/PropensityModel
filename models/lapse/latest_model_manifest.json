@@ -1,0 +1,138 @@
+{
+  "schema_version": 2,
+  "bundle_name": "lgbm_lapse_multidomain_v1_h21_20261123_111333_402173",
+  "created_at": "20261123_111333_402173",
+  "target": "lapse",
+  "feature_set_version": "multidomain_v1",
+  "features": [
+    "days_since_last_basket",
+    "days_since_last_perishable",
+    "median_inter_trip",
+    "std_inter_trip",
+    "urgency_ratio",
+    "baskets_count_14d",
+    "baskets_count_30d",
+    "baskets_count_60d",
+    "baskets_count_90d",
+    "baskets_count_180d",
+    "frequency_momentum_30_vs_90",
+    "spend_30d",
+    "spend_90d",
+    "spend_180d",
+    "aov_90d",
+    "avg_items_per_basket_90d",
+    "perishable_basket_ratio_90d",
+    "is_targeted_by_active_campaign",
+    "coupon_redemption_count_180d",
+    "primary_store_id",
+    "store_loyalty_index",
+    "classification_1",
+    "classification_2",
+    "classification_3",
+    "HOMEOWNER_DESC",
+    "classification_4",
+    "classification_5",
+    "KID_CATEGORY_DESC"
+  ],
+  "categorical_features": [
+    "classification_1",
+    "classification_2",
+    "classification_3",
+    "HOMEOWNER_DESC",
+    "classification_4",
+    "classification_5",
+    "KID_CATEGORY_DESC"
+  ],
+  "horizon_days": 21,
+  "lookback_days": 180,
+  "fit_cutoffs": [
+    200,
+    230,
+    260,
+    290,
+    320,
+    350,
+    380,
+    410,
+    440,
+    470,
+    500
+  ],
+  "val_cutoffs": [
+    530,
+    560,
+    590
+  ],
+  "test_cutoffs": [
+    650,
+    680
+  ],
+  "calibration_method": "isotonic",
+  "calibration_report": {
+    "none": {
+      "cv_ece": 0.016751
+    },
+    "platt": {
+      "cv_ece": 0.007534
+    },
+    "isotonic": {
+      "cv_ece": 0.004745
+    }
+  },
+  "best_iteration": 120,
+  "lgbm_params": {
+    "objective": "binary",
+    "n_estimators": 1000,
+    "learning_rate": 0.03,
+    "max_depth": 6,
+    "num_leaves": 31,
+    "min_child_samples": 20,
+    "subsample": 0.8,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+    "n_jobs": -1,
+    "verbosity": -1
+  },
+  "metrics": {
+    "roc_auc": 0.816083,
+    "pr_auc": 0.282504,
+    "brier_score": 0.082477,
+    "log_loss": 0.274629,
+    "ece": 0.010354,
+    "base_rate": 0.1059,
+    "top_10_precision": 0.3199,
+    "lift_at_10pct": 3.0199,
+    "max_attainable_lift_10": 9.4405,
+    "sample_size": 3729,
+    "top_decile_lift": 3.0199,
+    "brier_skill_score": 0.129127,
+    "normalized_lift_10": 0.239316,
+    "pr_auc_gain": 0.197498
+  },
+  "val_metrics": {
+    "roc_auc": 0.82794,
+    "pr_auc": 0.275614,
+    "brier_score": 0.076025,
+    "log_loss": 0.252424,
+    "ece": 0.016751,
+    "base_rate": 0.0959,
+    "top_10_precision": 0.3092,
+    "lift_at_10pct": 3.2244,
+    "max_attainable_lift_10": 10.4275,
+    "sample_size": 5537,
+    "top_decile_lift": 3.2244,
+    "brier_skill_score": 0.12316,
+    "normalized_lift_10": 0.23595,
+    "pr_auc_gain": 0.198776
+  },
+  "data_fingerprint": "385c047b9baa0a81",
+  "git_sha": "3a6912c-dirty",
+  "lightgbm_version": "4.7.0",
+  "sklearn_version": "1.7.2",
+  "version": "20261123_111333_402173",
+  "activated_at": "2026-11-23T11:13:33",
+  "activation_event": "promote",
+  "activation_reason": "governance gate passed",
+  "archive_path": "C:\\Users\\kienn\\PropensityVSF\\models\\lapse\\history\\champion_model_20261123_111333_402173.joblib"
+}
