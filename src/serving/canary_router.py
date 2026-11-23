@@ -38,7 +38,12 @@ class CanaryRouter:
     def load_challenger(self, model_path: Path | str) -> bool:
         """Loads a challenger candidate model bundle into memory."""
         try:
-            self.challenger = PropensityPredictor(model_path=model_path)
+            challenger = PropensityPredictor(model_path=model_path)
+            champion_def = (self.champion.target, self.champion.feature_set_version, self.champion.horizon_days)
+            challenger_def = (challenger.target, challenger.feature_set_version, challenger.horizon_days)
+            if challenger_def != champion_def:
+                raise ValueError(f"challenger predicts {challenger_def}, champion predicts {champion_def}")
+            self.challenger = challenger
             self.enabled = True
             logger.info(
                 f"Loaded Challenger model '{self.challenger.bundle_name}' from {model_path}. "

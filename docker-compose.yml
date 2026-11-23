@@ -106,6 +106,10 @@ services:
       - S3_SECRET_KEY=minioadmin
       - LAKEHOUSE_PATH=/app/data/lakehouse/propensity_warehouse.duckdb
       - MODEL_PATH=/app/models/champion_model.joblib
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      # Required in production: admin/write endpoints fail closed (503) without keys.
+      - SERVING_API_KEYS=${SERVING_API_KEYS:-}
+      - STRICT_INFRA=${STRICT_INFRA:-false}
     ports:
       - "8000:8000"
     volumes:
@@ -124,7 +128,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - S3_ENDPOINT=http://minio:9000
@@ -166,6 +174,7 @@ services:
       - S3_SECRET_KEY=minioadmin
       - LAKEHOUSE_PATH=/app/data/lakehouse/propensity_warehouse.duckdb
       - MODEL_PATH=/app/models/champion_model.joblib
+      - SERVING_API_KEYS=${SERVING_API_KEYS:-}
     volumes:
       - lakehouse_data:/app/data/lakehouse
       - ./models:/app/models

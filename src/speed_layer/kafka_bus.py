@@ -10,6 +10,7 @@ import json
 import logging
 import signal
 import socket
+import uuid
 from typing import Any, Dict, Optional
 
 try:
@@ -18,6 +19,7 @@ try:
 except (ImportError, ModuleNotFoundError):
     KAFKA_LIB_AVAILABLE = False
 
+from src.common.redis_client import InfrastructureUnavailable
 from src.config.settings import settings
 from src.speed_layer.delta_stream import SpeedLayerProcessor
 
@@ -65,6 +67,8 @@ class KafkaEventProducer:
 
     def _init_producer(self) -> None:
         if not _is_broker_reachable(self.bootstrap_servers, timeout=0.5):
+            if settings.STRICT_INFRA:
+                raise InfrastructureUnavailable(f"Kafka broker not reachable at {self.bootstrap_servers}")
             logger.info(
                 f"Kafka broker not listening at {self.bootstrap_servers}. "
                 "Activating direct Redis SpeedLayer fallback."
@@ -84,6 +88,8 @@ class KafkaEventProducer:
             )
             logger.info(f"Connected to Kafka broker at {self.bootstrap_servers} (Topic: {self.topic})")
         except Exception as e:
+            if settings.STRICT_INFRA:
+                raise InfrastructureUnavailable(f"Kafka producer init failed: {e}") from e
             logger.warning(
                 f"Kafka broker not accessible at {self.bootstrap_servers} ({e}). "
                 "Activating direct Redis SpeedLayer fallback."
@@ -93,7 +99,10 @@ class KafkaEventProducer:
     def publish_event(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Publishes event to Kafka topic or processes immediately via Redis fallback.
+        Every event gets an `event_id` (kept if the client sent one) so that redelivery and
+        client retries are applied at most once by the speed layer.
         """
+        event_data = {**event_data, "event_id": event_data.get("event_id") or uuid.uuid4().hex}
         hh_key = event_data.get("household_key")
 
         # 1. Try Kafka publish
@@ -106,6 +115,7 @@ class KafkaEventProducer:
                     f"partition {record_metadata.partition} offset {record_metadata.offset}"
                 )
                 return {
+                    "event_id": event_data["event_id"],
                     "dispatched_to": "kafka",
                     "topic": self.topic,
                     "partition": record_metadata.partition,
@@ -113,6 +123,8 @@ class KafkaEventProducer:
                     "status": "QUEUED",
                 }
             except Exception as e:
+                if settings.STRICT_INFRA:
+                    raise InfrastructureUnavailable(f"Kafka publish failed: {e}") from e
                 logger.warning(f"Failed to publish to Kafka ({e}), falling back to direct Redis.")
 
         # 2. Fallback: Direct Redis Ingestion
@@ -121,6 +133,7 @@ class KafkaEventProducer:
 
         delta = self._fallback_processor.process_event(event_data)
         return {
+            "event_id": event_data["event_id"],
             "dispatched_to": "direct_redis_fallback",
             "status": "ACCEPTED",
             "updated_delta": delta,

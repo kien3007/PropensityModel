@@ -242,47 +242,37 @@ Production-ready Airflow DAGs located in `dags/` featuring automatic retry polic
 
 ## 5. REST API Reference
 
-The Serving API provides low-latency inference fusing weekly batch scores with intraday streaming deltas:
+The Serving API fuses precomputed batch views with intraday streaming deltas.
 
-### 1. Health & Readiness Probe
-```bash
-curl -X GET http://localhost:8000/health
-```
-**Response:**
-```json
-{
-  "status": "HEALTHY",
-  "service": "propensity-serving-api",
-  "environment": "development",
-  "model_bundle": "28 multi-domain (projectphase3)",
-  "feature_count": 28
-}
-```
+**Where batch scores come from.** `src.pipelines.batch_pipeline` publishes each run to the shared
+`BatchScoreStore`: a Redis hash per variant (champion / challenger), swapped in atomically with `RENAME`,
+so every replica serves the same snapshot. Without Redis, the API loads the newest
+`data/outputs/batch_manifest_day_*.json` artefacts at start-up.
 
-### 2. Inspect Active Champion Model & Zero-Downtime Hot-Reload
-```bash
-# View active Champion model contract and features
-curl -X GET http://localhost:8000/v1/models/champion
+**Security.**
+- Protected endpoints require `X-API-Key` with a key from `SERVING_API_KEYS`: `POST /v1/speed/event`,
+  `POST /v1/canary/config`, `GET /v1/batch/scores` and `POST /v1/models/reload`.
+- With no keys configured, these endpoints are open in development and return `503` in production.
+- Predictions and events are rate-limited per client (`RATE_LIMIT_PER_MINUTE`).
+- `STRICT_INFRA=true` disables every in-memory fallback, so the service fails fast if Redis or an enabled Kafka is down.
 
-# Hot-reload newly trained Champion Model into memory without restarting API
-curl -X POST http://localhost:8000/v1/models/reload
-```
-**Response:**
-```json
-{
-  "status": "RELOADED",
-  "active_bundle": "28 multi-domain (projectphase3)",
-  "feature_count": 28
-}
-```
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /health` | – | Liveness: champion bundle, target, horizon, batch-view status |
+| `GET /ready` | – | Readiness: `503` until champion batch scores are loaded |
+| `POST /v1/predict/propensity` | – | Unified propensity for one household |
+| `POST /v1/speed/event` | key | Intraday event (`pos_checkout`, `coupon_clip`, `app_open`); idempotent on `event_id` |
+| `GET /v1/batch/scores` | key | Bulk export of batch views (`decile`, `limit`, `variant`) |
+| `GET /v1/canary/config` / `POST` | – / key | Read / change the champion-challenger split |
+| `GET /v1/models/champion` | – | Active champion contract |
+| `POST /v1/models/reload` | key | Hot-reload the champion from the registry |
+| `GET /metrics`, `GET /v1/metrics` | – | Prometheus / JSON metrics |
 
-### 3. Predict Real-Time Unified Propensity
+### Predict
 ```bash
 curl -X POST http://localhost:8000/v1/predict/propensity \
-  -H "Content-Type: application/json" \
-  -d '{"household_key": 100}'
+  -H "Content-Type: application/json" -d '{"household_key": 100}'
 ```
-**Response:**
 ```json
 {
   "household_key": 100,
@@ -291,45 +281,59 @@ curl -X POST http://localhost:8000/v1/predict/propensity \
   "decile": 9,
   "urgency_tier": "URGENT",
   "marketing_action": "VIP_COUPON_HALO_UPSELL",
-  "intraday_delta": {
-    "intraday_trips_detected": 0,
-    "intraday_coupons_clipped": 0,
-    "intraday_spend": 0.0
-  },
-  "applied_fusion_rules": []
+  "intraday_delta": {"intraday_trips_detected": 0, "intraday_coupons_clipped": 0, "intraday_spend": 0.0},
+  "applied_fusion_rules": [],
+  "model_variant": "champion",
+  "routed_variant": "champion",
+  "score_source": "batch",
+  "batch_snapshot_day": 711
 }
 ```
 
-### 3. Ingest Streaming Speed Event
-When a customer completes a POS checkout or clips a coupon in the mobile app:
+`score_source` tells you where the baseline came from:
+- `batch`: the household's batch view.
+- `cold_start`: the household has no batch view. The baseline is the population mean of the latest batch
+  (or the champion's test base rate), `decile` is `null` and the action is `COLD_START_DEFAULT`.
+
+`routed_variant` is the canary assignment, and `model_variant` is the batch view actually served. These
+differ when the challenger has no published scores yet; the champion view is served instead.
+
+### Ingest a speed event
 ```bash
 curl -X POST http://localhost:8000/v1/speed/event \
-  -H "Content-Type: application/json" \
-  -d '{
-    "household_key": 100,
-    "event_type": "pos_checkout",
-    "sales_value": 78.50
-  }'
+  -H "Content-Type: application/json" -H "X-API-Key: $SERVING_API_KEY" \
+  -d '{"household_key": 100, "event_type": "pos_checkout", "sales_value": 78.50, "event_id": "pos-123"}'
 ```
-**Immediate Dynamic Effect:**
-The next call to `/v1/predict/propensity` for household 100 instantly applies the **Intraday Purchase Dampening Rule** ($P_{\text{unified}} = P_{\text{batch}} \times 0.25$), switching the urgency tier to `LOW` and marketing action to `POST_PURCHASE_COOLDOWN`, preventing redundant marketing spend.
 
-### 4. Query Batch Scores
+The next prediction for household 100 applies the intraday dampening rule
+($P = P_{\text{batch}} \times$ `FUSION_PURCHASE_DAMPENING`). Re-sending the same `event_id` (a client retry
+or a Kafka redelivery) is acknowledged without being applied twice.
+
+The fusion coefficients (`FUSION_*` settings) are **heuristics**, not learned parameters. Recalibrate them
+from feedback data.
+
+### Batch export, canary, reload
 ```bash
-# Retrieve top Decile 10 households for upcoming campaign
-curl -X GET "http://localhost:8000/v1/batch/scores?decile=10&limit=50"
+curl -H "X-API-Key: $SERVING_API_KEY" "http://localhost:8000/v1/batch/scores?decile=10&limit=50"
+
+# Challenger must predict the same target / horizon / feature set as the champion.
+# Score it in the batch layer (CHALLENGER_MODEL_PATH or --challenger) so routed traffic gets its own view.
+curl -X POST http://localhost:8000/v1/canary/config -H "Content-Type: application/json" \
+  -H "X-API-Key: $SERVING_API_KEY" \
+  -d '{"challenger_ratio": 0.20, "challenger_model_path": "/app/models/challenger_model.joblib"}'
+
+curl -X POST -H "X-API-Key: $SERVING_API_KEY" http://localhost:8000/v1/models/reload
 ```
 
-### 5. Inspect & Dynamically Update Canary A/B Testing Weights
-```bash
-# Check current traffic allocation (default: 90% Champion / 10% Challenger)
-curl -X GET http://localhost:8000/v1/canary/config
+### Load test
+`python -m scripts.load_test` starts uvicorn, waits for `/ready` and reports p50 / p95 / p99. The Phase 4
+target is predict p99 < 50 ms. Measured locally with one worker, the memory backend and the client on the
+same machine:
 
-# Dynamically adjust traffic split to 80/20 at runtime (zero restart)
-curl -X POST http://localhost:8000/v1/canary/config \
-  -H "Content-Type: application/json" \
-  -d '{"champion_ratio": 0.80, "challenger_ratio": 0.20}'
-```
+| Concurrency | p50 | p95 | p99 |
+|---|---|---|---|
+| 16 | 26.2 ms | 42.3 ms | 47.3 ms |
+| 4 | 8.5 ms | 30.6 ms | 31.9 ms |
 
 ---
 
@@ -359,7 +363,8 @@ local Feast registry / live infrastructure). Pipeline tests use the synthetic da
 7. `tests/test_lambda_fusion.py`: Validates the mathematical rules of the Serving Layer (intraday dampening, coupon intent surge, app nudge).
 8. `tests/test_monitoring.py`: Validates Model & Data Drift Monitor (numerical PSI, categorical PSI, two-sample KS-test, drift reports) and Prometheus metrics exporter.
 9. `tests/test_scheduler.py`: Validates `ScheduledTask` triggers (interval, daily, weekly, monthly), scheduler execution, and Apache Airflow DAG structures.
-10. `tests/test_serving_api.py`: Validates all FastAPI endpoints (`/health`, `/metrics`, `/v1/predict/propensity`, `/v1/speed/event`, `/v1/canary/config`, `/v1/batch/scores`, `/v1/metrics`, `/v1/models/champion`, `/v1/models/reload`).
+10. `tests/test_serving_api.py`: Validates batch-view serving, cold start, fusion rules from settings, API-key auth (401 / fail-closed 503), rate limiting (429), event idempotency, readiness and canary variant serving.
+14. `tests/test_serving_infra.py`: Validates the Redis batch store (atomic snapshot swap, shared across replicas), bootstrap from batch artefacts, Redis-backed idempotent speed layer, STRICT_INFRA fail-fast, canary contract checks and challenger scoring in the batch pipeline.
 11. `tests/test_training_pipeline.py`: Validates leakage-safe splits, labeling, calibration selection, evaluation metrics, governance gate and the end-to-end retraining pipeline (bundle schema v2).
 12. `tests/test_feature_contract.py`: Validates point-in-time correctness of the 28 features and train/serve parity (CSV vs Lakehouse loaders, training vs batch scoring).
 13. `tests/test_predictor.py`: Validates champion bundle schema checks (feature set, horizon, ambiguous bundles) and scoring.

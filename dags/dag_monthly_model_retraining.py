@@ -89,6 +89,7 @@ def task_train_and_evaluate(target: str = "purchase", **kwargs) -> Dict[str, Any
 def task_notify_and_hot_reload(**kwargs) -> None:
     """Invokes serving gateway /v1/models/reload endpoint to swap active weights without downtime."""
     from src.config.settings import settings
+    from src.serving.security import admin_request_headers
 
     ti = kwargs.get("ti")
     is_promoted = True
@@ -105,7 +106,7 @@ def task_notify_and_hot_reload(**kwargs) -> None:
         req = urllib.request.Request(
             reload_url,
             data=b"{}",
-            headers={"Content-Type": "application/json"},
+            headers=admin_request_headers(),
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10.0) as resp:

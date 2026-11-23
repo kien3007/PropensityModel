@@ -1,6 +1,6 @@
 # Kế hoạch hoàn thiện PropensityVSF
 
-> Ngày lập: 2026-11-23 · Trạng thái: Phase 0–3 đã hoàn thành (2026-11-23); Phase 4–7 chưa làm
+> Ngày lập: 2026-11-23 · Trạng thái: Phase 0–4 đã hoàn thành (2026-11-23); Phase 5–7 chưa làm
 
 ## Bối cảnh
 
@@ -82,6 +82,28 @@ Chi tiết và số liệu đầy đủ nằm ở [analysis/TARGET_ANALYSIS.md](
   - Purchase: mọi model đều chọn đúng nhóm khách hàng mua nhiều và đều đặn (precision khoảng 1.0). Chi tiêu của nhóm này không phải doanh thu tăng thêm.
 - **Lưu trữ EDA/CRISP-DM (3.4).** Notebook, tài liệu, slide và từ điển dữ liệu được khôi phục vào [analysis/archive_crisp_dm/](analysis/archive_crisp_dm/) từ commit `120ade9`. Không lấy `artifacts/`; các notebook không chạy lại được, nhưng vẫn xem được output đã lưu.
 - **Chưa đạt trọn tiêu chí nghiệm thu "hơn baseline có ý nghĩa".** Model vượt rõ luật heuristic và chọn ngẫu nhiên. Nhưng **logistic regression gần ngang LightGBM** ở cả hai target: lapse AUC 0.809 so với 0.816, purchase 0.856 so với 0.859; về giá trị tiền của target purchase, logistic regression còn tốt hơn. Cần giữ logistic regression làm baseline bắt buộc. Bước tiếp theo để chứng minh giá trị là thiết kế uplift / holdout.
+
+### Phase 4: đã xong
+- **Lỗi lớn phát hiện thêm:** API trước đây **không bao giờ nạp điểm batch** (`_batch_cache` chỉ được nạp trong test). Ở môi trường thật, mọi request đều trả 0.5 và decile 5. Điểm challenger cũng không bao giờ được dùng.
+- **Kho điểm batch dùng chung** ([batch_store.py](../src/serving/batch_store.py)):
+  - Batch pipeline ghi điểm vào Redis, mỗi biến thể (champion / challenger) một hash, và đổi sang bản mới bằng `RENAME` atomic. Mọi replica đọc chung một bản.
+  - Khi không có Redis, API nạp điểm từ artifact của lần batch mới nhất lúc khởi động.
+  - Có endpoint `/ready`, trả 503 khi chưa có điểm batch.
+- **Luật fusion** lấy từ `settings.FUSION_*` và được ghi rõ là heuristic (4.1).
+- **Cold-start** trả rõ `score_source="cold_start"` cùng xác suất trung bình của toàn bộ hộ, không trả 0.5 im lặng (4.2). Ràng buộc `household_key ≤ 2500` đã được bỏ.
+- **Canary (4.4).**
+  - Batch chấm điểm thêm challenger (`--challenger` / `CHALLENGER_MODEL_PATH`), và traffic được route sang challenger sẽ nhận điểm của challenger.
+  - Response trả về cả `routed_variant` (biến thể được route) và `model_variant` (điểm thực sự được dùng).
+  - Challenger phải có cùng target, horizon và feature set với champion.
+- **`STRICT_INFRA` (4.5).** Khi bật, Redis hoặc Kafka không kết nối được thì service lỗi ngay, không âm thầm fallback. Sự kiện có `event_id` và được xử lý idempotent (đánh dấu trong Redis bằng `SET NX` có TTL).
+- **Bảo mật (4.6).**
+  - Các endpoint ghi, admin và xuất hàng loạt yêu cầu `X-API-Key`. Ở production nếu chưa cấu hình key thì chặn hẳn (503).
+  - Rate limit theo client, trả 429 khi vượt ngưỡng.
+  - Scheduler và DAG gửi kèm key khi gọi hot-reload.
+- **Nghiệm thu.**
+  - Có test cho 401, 503, 429, cold-start, idempotency và Redis store (dùng `fakeredis`).
+  - Load test `python -m scripts.load_test` (1 worker, backend memory, client chạy cùng máy): p99 của predict là **47.3 ms** ở 16 request đồng thời và 31.9 ms ở 4, đạt mục tiêu < 50 ms nhưng sát ngưỡng ở 16. Ở production nên chạy nhiều worker.
+- **Chưa làm:** rate limit hiện chỉ áp dụng trong từng tiến trình, chưa chia sẻ giữa các replica (việc này thuộc về gateway). Docker compose chưa được chạy thử end-to-end (Phase 6).
 
 ### Phát hiện mới (đầu vào cho Phase 3)
 - Gate cũ **không thể đạt**: lift@10% tối đa của tập test là 1.426, trong khi ngưỡng là 1.50. Đã sửa ở Phase 2.

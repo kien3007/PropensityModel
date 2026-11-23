@@ -216,7 +216,9 @@ class MLSystemScheduler:
         """Sends HTTP POST /v1/models/reload to Serving Gateway."""
         reload_url = f"{self.serving_api_url.rstrip('/')}/v1/models/reload"
         try:
-            req = urllib.request.Request(reload_url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+            from src.serving.security import admin_request_headers
+
+            req = urllib.request.Request(reload_url, data=b"{}", headers=admin_request_headers(), method="POST")
             with urllib.request.urlopen(req, timeout=5.0) as resp:
                 data = json.loads(resp.read().decode())
                 logger.info(f"Serving Gateway hot-reload response: {data}")

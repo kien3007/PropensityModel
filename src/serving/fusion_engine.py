@@ -1,14 +1,26 @@
 """
-Serving Layer: Unified Lambda Fusion Engine.
-Fuses Precomputed Batch Views with Real-Time Speed Layer Deltas.
+Serving Layer: Lambda Fusion Engine.
+
+P_final = Merge(BatchView[variant][h], RealTimeDelta[h])
+
+- The batch view comes from the shared BatchScoreStore, for the variant the canary router
+  assigns (champion / challenger). If the challenger has no batch scores, the champion's
+  view is served and reported as such.
+- Households without a batch view get an explicit cold-start answer (population mean
+  probability, score_source="cold_start") instead of a silent 0.5.
+- Fusion rules are HEURISTIC adjustments configured in settings (FUSION_*); they are not
+  learned and should be recalibrated from ground-truth feedback.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional
+
 import pandas as pd
 
+from src.config.settings import settings
 from src.models.predictor import PropensityPredictor
+from src.serving.batch_store import BatchScoreStore
 from src.serving.canary_router import CanaryRouter
 from src.speed_layer.delta_stream import SpeedLayerProcessor
 
@@ -16,101 +28,84 @@ logger = logging.getLogger(__name__)
 
 
 class LambdaFusionEngine:
-    """
-    Implements the Serving Layer Fusion function with A/B Canary Routing:
-    P_final = Merge(BatchView[h], RealTimeDelta[h])
-    """
-
     def __init__(
         self,
         predictor: Optional[PropensityPredictor] = None,
         speed_processor: Optional[SpeedLayerProcessor] = None,
         canary_router: Optional[CanaryRouter] = None,
+        batch_store: Optional[BatchScoreStore] = None,
     ) -> None:
-        self.predictor = predictor or PropensityPredictor()
+        self.predictor = predictor or PropensityPredictor(expected_target="purchase")
         self.speed_processor = speed_processor or SpeedLayerProcessor()
         self.router = canary_router or CanaryRouter(champion_predictor=self.predictor)
-        self._batch_cache: Dict[int, Dict[str, Any]] = {}
+        self.batch_store = batch_store or BatchScoreStore()
 
     def reload_predictor(self) -> None:
-        """Hot-reloads champion model in serving gateway."""
+        """Hot-reloads the champion bundle (metadata for /v1/models/champion and cold start)."""
         self.predictor.reload()
         self.router.champion = self.predictor
 
-    def set_batch_cache(self, batch_df: pd.DataFrame) -> None:
-        """
-        Updates the serving cache with precomputed weekly batch scores.
-        """
-        for _, row in batch_df.iterrows():
-            hh = int(row["household_key"])
-            self._batch_cache[hh] = {
-                "household_key": hh,
-                "batch_probability": float(row.get("purchase_probability", 0.5)),
-                "rank": int(row.get("rank", 1250)),
-                "decile": int(row.get("decile", 5)),
-                "urgency_tier": str(row.get("urgency_tier", "REGULAR")),
-                "marketing_action": str(row.get("marketing_action", "STANDARD_ENGAGEMENT")),
-            }
-        logger.info(f"Serving Layer cached batch scores for {len(self._batch_cache)} households.")
+    def set_batch_cache(self, batch_df: pd.DataFrame, variant: str = "champion") -> int:
+        """Publishes batch scores into the shared store (used by tests and ad-hoc loads)."""
+        return self.batch_store.publish(batch_df, variant, {"source": "set_batch_cache"})
+
+    def cold_start_probability(self) -> float:
+        meta = self.batch_store.metadata("champion") or {}
+        if meta.get("mean_probability") is not None:
+            return float(meta["mean_probability"])
+        base_rate = (self.predictor.bundle.get("metrics") or {}).get("base_rate")
+        return float(base_rate) if base_rate is not None else 0.5
 
     def get_unified_propensity(self, household_key: int) -> Dict[str, Any]:
-        """
-        Computes unified real-time propensity score:
-        Merges precomputed batch baseline with live speed layer delta.
-        """
-        # 0. Route request via Canary Router (Champion vs Challenger)
-        predictor, variant = self.router.route(household_key)
+        _, routed_variant = self.router.route(household_key)
 
-        # 1. Fetch precomputed Batch View
-        batch_view = self._batch_cache.get(
-            household_key,
-            {
-                "household_key": household_key,
-                "batch_probability": 0.50,
-                "rank": 1250,
-                "decile": 5,
-                "urgency_tier": "REGULAR",
-                "marketing_action": "STANDARD_ENGAGEMENT",
-            },
-        )
+        variant = routed_variant
+        view = self.batch_store.get(household_key, variant)
+        if view is None and variant == "challenger":
+            variant = "champion"
+            view = self.batch_store.get(household_key, variant)
 
-        # 2. Fetch live Speed View delta
+        if view is None:
+            score_source = "cold_start"
+            base_p = round(self.cold_start_probability(), 4)
+            decile, urgency, action = None, "UNKNOWN", "COLD_START_DEFAULT"
+        else:
+            score_source = "batch"
+            base_p = float(view["batch_probability"])
+            decile, urgency, action = int(view["decile"]), view["urgency_tier"], view["marketing_action"]
+
         delta = self.speed_processor.get_delta(household_key)
-
-        base_p = batch_view["batch_probability"]
         unified_p = base_p
-        urgency = batch_view["urgency_tier"]
-        action = batch_view["marketing_action"]
         applied_rules = []
 
-        # Rule 1: Intraday checkout detected -> Household already shopped today
+        # Rule 1: intraday checkout detected -> already shopped today
         if delta.get("intraday_trips_detected", 0) == 1:
-            unified_p = round(base_p * 0.25, 4)
-            urgency = "LOW"
-            action = "POST_PURCHASE_COOLDOWN"
+            unified_p = round(base_p * settings.FUSION_PURCHASE_DAMPENING, 4)
+            urgency, action = "LOW", "POST_PURCHASE_COOLDOWN"
             applied_rules.append("intraday_purchase_dampening")
-
-        # Rule 2: Active coupon clipped today -> Intent surge
+        # Rule 2: coupon clipped today -> intent surge
         elif delta.get("intraday_coupons_clipped", 0) >= 1:
-            boost = 0.15 * delta["intraday_coupons_clipped"]
+            boost = settings.FUSION_COUPON_BOOST_PER_CLIP * delta["intraday_coupons_clipped"]
             unified_p = round(min(1.0, base_p + boost), 4)
-            urgency = "URGENT"
-            action = "VIP_COUPON_HALO_UPSELL"
+            urgency, action = "URGENT", "VIP_COUPON_HALO_UPSELL"
             applied_rules.append("coupon_clipping_intent_surge")
-
-        # Rule 3: Mobile app interactions -> Slight engagement lift
-        elif delta.get("intraday_app_interactions", 0) >= 2:
-            unified_p = round(min(1.0, base_p + 0.05), 4)
+        # Rule 3: repeated app interactions -> slight engagement lift
+        elif delta.get("intraday_app_interactions", 0) >= settings.FUSION_APP_MIN_INTERACTIONS:
+            unified_p = round(min(1.0, base_p + settings.FUSION_APP_NUDGE), 4)
             applied_rules.append("app_browsing_nudge")
 
+        meta = self.batch_store.metadata(variant) or {}
         return {
             "household_key": household_key,
             "unified_propensity": unified_p,
             "batch_baseline_propensity": base_p,
-            "decile": batch_view["decile"],
+            "decile": decile,
             "urgency_tier": urgency,
             "marketing_action": action,
             "intraday_delta": delta,
             "applied_fusion_rules": applied_rules,
             "model_variant": variant,
+            "routed_variant": routed_variant,
+            "score_source": score_source,
+            "batch_snapshot_day": meta.get("snapshot_day"),
         }
