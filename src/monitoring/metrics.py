@@ -4,10 +4,8 @@ Tracks Request Latency (P50/P95/P99), RPS, Deciles, Urgency Tiers, Fusion Rules,
 """
 from __future__ import annotations
 
-import time
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 from prometheus_client import (
-    CollectorRegistry,
     Counter,
     Gauge,
     Histogram,

@@ -17,6 +17,7 @@ def temp_lakehouse(tmp_path):
     return engine
 
 
+@pytest.mark.requires_data
 def test_lakehouse_pipeline_and_dq(temp_lakehouse):
     # 1. Ingest Bronze
     ingested = temp_lakehouse.ingest_bronze()

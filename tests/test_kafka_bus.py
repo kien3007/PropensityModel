@@ -3,8 +3,7 @@ Unit tests for Kafka Event Bus and Streaming Speed Layer Dispatch.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import MagicMock
 
 from src.speed_layer.kafka_bus import KafkaEventProducer
 

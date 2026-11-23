@@ -3,8 +3,8 @@ Airflow DAG: Monthly Model Retraining, Governance Quality Gates & Zero-Downtime 
 Schedule: 1st of every month at 03:00 UTC (0 3 1 * *).
 Orchestrates:
   1. Multi-Cutoff Point-in-Time Temporal Dataset Construction.
-  2. Champion Model (LightGBM) Training & Platt/Isotonic Calibration.
-  3. Governance Gate Verification (ROC-AUC >= 0.85, Top Decile Lift >= 1.30, Brier <= 0.16).
+  2. Champion Model (LightGBM) Training & calibration chosen on validation (none/Platt/Isotonic).
+  3. Governance Gate Verification on the out-of-time test split (thresholds: src/config/model_config.py).
   4. Champion Registry Promotion & Lineage Tracking.
   5. Zero-Downtime Serving Gateway Hot-Reload via REST Webhook.
 """
@@ -59,22 +59,29 @@ def task_train_and_evaluate(**kwargs) -> Dict[str, Any]:
     from src.pipelines.train_pipeline import run_training_pipeline
 
     logger.info("Starting automated model retraining pipeline...")
-    summary = run_training_pipeline(
-        train_cutoffs=[250, 300, 350, 400, 450],
-        val_cutoff=537,
-        horizon_days=7,
-        force_promote=False,
-    )
+    # Target, splits and hyper-parameters come from src/config/model_config.py.
+    # Automated runs never override the gate: force_promote is a manual, audited action.
+    summary = run_training_pipeline(force_promote=False)
+    test_metrics = summary["test_metrics"]
+    gate = summary["governance_gate"]
+    if not gate["passed"]:
+        failed_quality = [k for k, c in gate["quality"]["checks"].items() if not c["pass"]]
+        comparison = gate["champion_comparison"]
+        logger.warning(
+            f"Candidate blocked. Failed quality checks: {failed_quality or 'none'}; "
+            f"champion comparison: {comparison['status']} "
+            f"(dAUC CI95={comparison.get('auc_delta_ci95')}, reason={comparison.get('reason')})"
+        )
     logger.info(
         f"Retraining finished. Promoted: {summary['promoted']}. "
-        f"Validation ROC-AUC: {summary['calibrated_metrics']['roc_auc']:.4f}, "
-        f"Brier: {summary['calibrated_metrics']['brier_score']:.4f}, "
-        f"Top Decile Lift: {summary['calibrated_metrics']['top_decile_lift']:.2f}x"
+        f"OOT test ROC-AUC: {test_metrics['roc_auc']:.4f}, "
+        f"Brier: {test_metrics['brier_score']:.4f}, "
+        f"Top Decile Lift: {test_metrics['top_decile_lift']:.2f}x"
     )
     ti = kwargs.get("ti")
     if ti is not None:
         ti.xcom_push(key="is_promoted", value=summary["promoted"])
-        ti.xcom_push(key="model_path", value=summary.get("promoted_model_path"))
+        ti.xcom_push(key="model_path", value=summary.get("promoted_path"))
     return summary
 
 

@@ -1,7 +1,8 @@
 {
-  "promoted_at": "20261117_150330",
-  "bundle_name": "28 multi-domain (projectphase3)",
-  "prediction_window_days": 14,
+  "schema_version": 2,
+  "bundle_name": "lgbm_multidomain_v1_h14_20261123_110542_974814",
+  "created_at": "20261123_110542_974814",
+  "feature_set_version": "multidomain_v1",
   "features": [
     "days_since_last_basket",
     "days_since_last_perishable",
@@ -41,25 +42,96 @@
     "classification_5",
     "KID_CATEGORY_DESC"
   ],
-  "metrics": {
-    "roc_auc": 0.860045,
-    "pr_auc": 0.934806,
-    "brier_score": 0.13628,
-    "log_loss": 0.418397,
-    "ece": 0.017141,
-    "top_decile_lift": 1.4143,
-    "decile_1_response_rate": 0.992,
-    "base_rate": 0.7014,
-    "test_sample_size": 5000
-  },
+  "horizon_days": 14,
+  "lookback_days": 180,
   "fit_cutoffs": [
-    200, 230, 260, 290, 320, 350, 380, 410, 440, 470, 500
+    200,
+    230,
+    260,
+    290,
+    320,
+    350,
+    380,
+    410,
+    440,
+    470,
+    500
   ],
   "val_cutoffs": [
-    530, 560, 590
+    530,
+    560,
+    590
   ],
   "test_cutoffs": [
-    650, 680
+    650,
+    680
   ],
-  "source_project": "C:\\Users\\kienn\\projectphase3"
+  "calibration_method": "isotonic",
+  "calibration_report": {
+    "none": {
+      "cv_ece": 0.009382
+    },
+    "platt": {
+      "cv_ece": 0.008376
+    },
+    "isotonic": {
+      "cv_ece": 0.008139
+    }
+  },
+  "best_iteration": 164,
+  "lgbm_params": {
+    "objective": "binary",
+    "n_estimators": 1000,
+    "learning_rate": 0.03,
+    "max_depth": 6,
+    "num_leaves": 31,
+    "min_child_samples": 20,
+    "subsample": 0.8,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+    "n_jobs": -1,
+    "verbosity": -1
+  },
+  "metrics": {
+    "roc_auc": 0.859332,
+    "pr_auc": 0.930665,
+    "brier_score": 0.13682,
+    "log_loss": 0.418777,
+    "ece": 0.019304,
+    "base_rate": 0.7014,
+    "top_10_precision": 0.994,
+    "lift_at_10pct": 1.4172,
+    "max_attainable_lift_10": 1.4257,
+    "sample_size": 5000,
+    "top_decile_lift": 1.4172,
+    "brier_skill_score": 0.346728,
+    "normalized_lift_10": 0.979952,
+    "pr_auc_gain": 0.7678
+  },
+  "val_metrics": {
+    "roc_auc": 0.869475,
+    "pr_auc": 0.937174,
+    "brier_score": 0.133556,
+    "log_loss": 0.410145,
+    "ece": 0.009382,
+    "base_rate": 0.6907,
+    "top_10_precision": 0.996,
+    "lift_at_10pct": 1.4421,
+    "max_attainable_lift_10": 1.4479,
+    "sample_size": 7500,
+    "top_decile_lift": 1.4421,
+    "brier_skill_score": 0.374873,
+    "normalized_lift_10": 0.987017,
+    "pr_auc_gain": 0.796899
+  },
+  "data_fingerprint": "385c047b9baa0a81",
+  "git_sha": "4d1e5e3",
+  "lightgbm_version": "4.7.0",
+  "sklearn_version": "1.7.2",
+  "version": "20261123_110542_974814",
+  "activated_at": "2026-11-23T11:05:47",
+  "activation_event": "promote",
+  "activation_reason": "governance gate passed",
+  "archive_path": "C:\\Users\\kienn\\PropensityVSF\\models\\history\\champion_model_20261123_110542_974814.joblib"
 }

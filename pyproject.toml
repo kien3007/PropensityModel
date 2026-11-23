@@ -45,7 +45,21 @@ packages = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "slow: long-running tests (deselect with '-m \"not slow\"')",
+    "requires_data: needs the real Dunnhumby CSVs under settings.DATA_RAW_DIR",
+    "integration: needs live infrastructure (Redis / Kafka / Feast registry)",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/**/__init__.py"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+extend-exclude = [".agent", "notebooks"]
+
+[tool.ruff.lint]
+# Pin the rule set so CI does not depend on a developer's global ruff config.
+select = ["E4", "E7", "E9", "F"]

@@ -15,7 +15,9 @@ import pandas as pd
 
 from feast import FeatureStore
 from src.config.settings import settings
-from src.features.pit_extractor import MULTIDOMAIN_FEATURES_28, PointInTimeFeatureExtractor
+from src.data.loader import DataLoader
+from src.features.contract import MODEL_FEATURES as MULTIDOMAIN_FEATURES_28
+from src.features.pit_extractor import MultiDomainFeatureBuilder
 
 logger = logging.getLogger("FeatureStoreClient")
 
@@ -85,10 +87,8 @@ class FeastFeatureStoreClient:
         parquet_file = gold_path / "fct_household_features_snapshot.parquet"
 
         logger.info(f"Extracting 28 multi-domain features for cutoff day {cutoff_day}...")
-        snapshot_df = PointInTimeFeatureExtractor.extract_multidomain_features(
-            cutoff=cutoff_day,
-            raw_data_dir=raw_data_dir,
-        )
+        data = DataLoader.from_csv(raw_data_dir) if raw_data_dir is not None else DataLoader.load()
+        snapshot_df = MultiDomainFeatureBuilder(data).features_at(cutoff_day)
 
         # Feast requires event_timestamp column
         base_date = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)

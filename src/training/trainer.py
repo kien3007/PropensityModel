@@ -1,11 +1,12 @@
 """
-Model Training and Optimization Module.
-Handles LightGBM classifier training and baseline logistic regression model.
+Model Training: LightGBM champion candidate (native categoricals, early stopping on the
+validation split) and a numeric-only logistic regression baseline for benchmarking.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
+
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
@@ -13,72 +14,80 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.features.pit_extractor import MODEL_FEATURES
+from src.config.model_config import DEFAULT_TRAINING_CONFIG
+from src.features.contract import CATEGORICAL_FEATURES, MODEL_FEATURES
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LGBM_PARAMS: Dict[str, Any] = {
-    "n_estimators": 200,
-    "learning_rate": 0.05,
-    "num_leaves": 15,
-    "min_child_samples": 100,
-    "subsample": 1.0,
-    "colsample_bytree": 1.0,
-    "random_state": 42,
-    "n_jobs": 2,
-    "verbosity": -1,
-}
-
 
 class ModelTrainer:
-    """
-    Trains propensity classification models with scikit-learn compatible interfaces.
-    """
-
     def __init__(
         self,
         features: Optional[List[str]] = None,
+        categorical_features: Optional[List[str]] = None,
         lgbm_params: Optional[Dict[str, Any]] = None,
+        early_stopping_rounds: int = DEFAULT_TRAINING_CONFIG.early_stopping_rounds,
     ) -> None:
-        self.features = features or MODEL_FEATURES
-        self.lgbm_params = lgbm_params or DEFAULT_LGBM_PARAMS
+        self.features = list(features or MODEL_FEATURES)
+        default_cats = CATEGORICAL_FEATURES if features is None else []
+        cats = categorical_features if categorical_features is not None else default_cats
+        self.categorical_features = [c for c in cats if c in self.features]
+        self.lgbm_params = dict(lgbm_params or DEFAULT_TRAINING_CONFIG.lgbm_params)
+        self.early_stopping_rounds = early_stopping_rounds
 
-    def train_lightgbm(self, X_train: pd.DataFrame, y_train: pd.Series | np.ndarray) -> lgb.LGBMClassifier:
-        """
-        Trains LightGBM classifier on extracted features.
-        """
-        X = X_train[self.features]
+    def _prepare(self, X: pd.DataFrame) -> pd.DataFrame:
+        out = X[self.features].copy()
+        for col in self.categorical_features:
+            if out[col].dtype.name != "category":
+                out[col] = out[col].astype("category")
+        return out
+
+    def train_lightgbm(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series | np.ndarray,
+        X_val: Optional[pd.DataFrame] = None,
+        y_val: Optional[pd.Series | np.ndarray] = None,
+    ) -> lgb.LGBMClassifier:
+        """Fits LightGBM; with a validation set, stops early on validation log loss."""
+        X = self._prepare(X_train)
         y = np.asarray(y_train, dtype=int)
-
-        logger.info(f"Training LightGBM on {len(X)} samples with {len(self.features)} features...")
         model = lgb.LGBMClassifier(**self.lgbm_params)
-        model.fit(X, y)
-        logger.info("LightGBM training completed successfully.")
+
+        fit_kwargs: Dict[str, Any] = {}
+        if X_val is not None and y_val is not None:
+            fit_kwargs["eval_set"] = [(self._prepare(X_val), np.asarray(y_val, dtype=int))]
+            fit_kwargs["eval_metric"] = "binary_logloss"
+            fit_kwargs["callbacks"] = [lgb.early_stopping(self.early_stopping_rounds, first_metric_only=True, verbose=False)]
+
+        logger.info(f"Training LightGBM on {len(X):,} rows x {len(self.features)} features...")
+        model.fit(X, y, **fit_kwargs)
+        logger.info(f"LightGBM training finished (best iteration: {self.best_iteration(model)}).")
         return model
 
-    def train_baseline_logistic(self, X_train: pd.DataFrame, y_train: pd.Series | np.ndarray) -> Pipeline:
-        """
-        Trains baseline Logistic Regression pipeline for benchmarking.
-        """
-        X = X_train[self.features]
-        y = np.asarray(y_train, dtype=int)
+    @staticmethod
+    def best_iteration(model: lgb.LGBMClassifier) -> int:
+        best = getattr(model, "best_iteration_", None)
+        return int(best) if best else int(model.n_estimators)
 
-        logger.info("Training baseline Logistic Regression model...")
+    def predict_raw(self, model: lgb.LGBMClassifier, X: pd.DataFrame) -> np.ndarray:
+        return model.predict_proba(self._prepare(X))[:, 1]
+
+    def train_baseline_logistic(self, X_train: pd.DataFrame, y_train: pd.Series | np.ndarray) -> Pipeline:
+        """Standardised logistic regression on the numeric features (benchmark only)."""
+        numeric = [f for f in self.features if f not in self.categorical_features]
         pipe = Pipeline([
             ("scaler", StandardScaler()),
             ("classifier", LogisticRegression(max_iter=1000, random_state=42)),
         ])
-        pipe.fit(X, y)
-        logger.info("Baseline Logistic Regression training completed.")
+        pipe.fit(X_train[numeric], np.asarray(y_train, dtype=int))
+        pipe.feature_names_ = numeric
         return pipe
 
-    def get_feature_importances(self, model: lgb.LGBMClassifier) -> pd.DataFrame:
-        """
-        Returns feature importances sorted descending.
-        """
-        importances = model.feature_importances_
-        df = pd.DataFrame({
-            "feature": self.features,
-            "importance": importances,
-        }).sort_values(by="importance", ascending=False).reset_index(drop=True)
-        return df
+    def get_feature_importances(self, model: lgb.LGBMClassifier, importance_type: str = "gain") -> pd.DataFrame:
+        importances = model.booster_.feature_importance(importance_type=importance_type)
+        return (
+            pd.DataFrame({"feature": self.features, "importance": importances})
+            .sort_values("importance", ascending=False)
+            .reset_index(drop=True)
+        )

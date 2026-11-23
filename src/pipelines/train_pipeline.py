@@ -1,7 +1,15 @@
 """
-End-to-End Retraining Pipeline Orchestration Module.
-Extracts Point-in-Time temporal datasets, trains Champion Candidate (LightGBM),
-calibrates probabilities, evaluates governance quality gates, and registers promoted model.
+End-to-End Retraining Pipeline.
+
+  load data (DataLoader) -> fit / val / test splits (DatasetBuilder, TrainingConfig cutoffs)
+  -> LightGBM with early stopping on val -> calibrator chosen on val (cross-fitted ECE)
+  -> out-of-time evaluation on test -> governance gate -> bundle (+ optional promotion)
+
+Governance gate = quality checks (base-rate relative, src/config/model_config.GateConfig)
+AND non-inferiority versus the active champion on the same test rows.
+
+Every run writes a candidate bundle and a JSON manifest to `output_dir`, whether or not
+it is promoted, so any run can be inspected or compared against the champion later.
 """
 from __future__ import annotations
 
@@ -10,148 +18,155 @@ import datetime
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-import pandas as pd
+from typing import Any, Dict, Optional
 
+from src.config.model_config import DEFAULT_TRAINING_CONFIG, TrainingConfig
 from src.config.settings import settings
-from src.features.pit_extractor import MODEL_FEATURES
+from src.data.loader import DataLoader, RawDataBundle
+from src.features.contract import CATEGORICAL_FEATURES, FEATURE_SET_VERSION, MODEL_FEATURES
+from src.features.pit_extractor import MultiDomainFeatureBuilder
+from src.training.calibrator import select_calibrator
+from src.training.champion_challenger import compare_with_champion
 from src.training.dataset_builder import DatasetBuilder
-from src.training.trainer import ModelTrainer
-from src.training.calibrator import PlattCalibrator
 from src.training.evaluator import ModelEvaluator
-from src.training.model_registry import ModelRegistry
+from src.training.model_registry import ModelRegistry, build_bundle
+from src.training.trainer import ModelTrainer
 
 logger = logging.getLogger("TrainPipeline")
 
 
 def run_training_pipeline(
-    train_cutoffs: Optional[List[int]] = None,
-    val_cutoff: int = 537,
-    horizon_days: int = 7,
-    transactions_csv: Optional[Path | str] = None,
+    config: Optional[TrainingConfig] = None,
+    data: Optional[RawDataBundle] = None,
     output_dir: Optional[Path | str] = None,
+    registry_dir: Optional[Path | str] = None,
+    promote: bool = True,
     force_promote: bool = False,
 ) -> Dict[str, Any]:
     """
-    Executes the End-to-End Retraining Pipeline.
+    Trains and evaluates a champion candidate.
+
+    promote=False never touches the registry (used by the reproduction check);
+    force_promote=True promotes even when the governance gate fails (manual use only).
     """
-    start_time = datetime.datetime.now()
-    train_cutoffs = train_cutoffs or [250, 300, 350, 400, 450]
-    run_id = f"TRAIN_{start_time.strftime('%Y%m%d_%H%M%S')}"
+    cfg = config or DEFAULT_TRAINING_CONFIG
+    if cfg.feature_set_version != FEATURE_SET_VERSION:
+        raise ValueError(f"Config targets feature set {cfg.feature_set_version}, code implements {FEATURE_SET_VERSION}")
 
-    logger.info(f"=== Starting Model Retraining Pipeline: {run_id} ===")
-    logger.info(f"Train Cutoffs: {train_cutoffs} | Validation Cutoff: {val_cutoff} | Horizon: {horizon_days}d")
-
+    start = datetime.datetime.now()
+    run_id = f"TRAIN_{start.strftime('%Y%m%d_%H%M%S')}"
     out_dir = Path(output_dir or settings.OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"=== Retraining {run_id}: horizon={cfg.horizon_days}d, fit={list(cfg.fit_cutoffs)}, "
+                f"val={list(cfg.val_cutoffs)}, test={list(cfg.test_cutoffs)} ===")
 
-    tx_path = Path(transactions_csv or (settings.DATA_RAW_DIR / "transaction_data.csv"))
-    if not tx_path.exists():
-        raise FileNotFoundError(f"Source transactions file not found at {tx_path}")
+    # 1. Data & temporal splits
+    raw = data or DataLoader.load()
+    features = MultiDomainFeatureBuilder(raw, lookback_days=cfg.lookback_days)
+    splits = DatasetBuilder(features).build_splits(cfg)
+    fit, val, test = splits["fit"], splits["val"], splits["test"]
 
-    # 1. Load transactions
-    cols = ["household_key", "BASKET_ID", "DAY", "SALES_VALUE"]
-    logger.info(f"Loading raw transactions from {tx_path}...")
-    tx = pd.read_csv(tx_path, usecols=cols)
-
-    # 2. Build temporal training dataset
-    logger.info("Building multi-cutoff training dataset...")
-    train_df = DatasetBuilder.build_multi_cutoff_dataset(
-        transactions=tx,
-        cutoffs=train_cutoffs,
-        horizon_days=horizon_days,
-        feature_cols=MODEL_FEATURES,
+    # 2. Train with early stopping on validation
+    trainer = ModelTrainer(
+        features=MODEL_FEATURES,
+        categorical_features=CATEGORICAL_FEATURES,
+        lgbm_params=cfg.lgbm_params,
+        early_stopping_rounds=cfg.early_stopping_rounds,
     )
+    model = trainer.train_lightgbm(fit.X, fit.y, val.X, val.y)
+    best_iteration = trainer.best_iteration(model)
 
-    # 3. Build validation dataset
-    logger.info(f"Building validation dataset at DAY={val_cutoff}...")
-    val_df = DatasetBuilder.build_snapshot_with_target(
-        transactions=tx,
-        cutoff_day=val_cutoff,
-        horizon_days=horizon_days,
-        feature_cols=MODEL_FEATURES,
+    # 3. Calibration chosen on validation only
+    raw_val = trainer.predict_raw(model, val.X)
+    calibrator, calibration_report = select_calibrator(
+        raw_val, val.y.to_numpy(), methods=cfg.calibration_methods, n_folds=cfg.calibration_cv_folds,
     )
+    # Raw (uncalibrated) metrics: the calibrator is fitted on these same rows, so calibrated
+    # validation metrics would be in-sample. Its out-of-fold ECE is in calibration_report.
+    val_metrics = ModelEvaluator.evaluate(val.y, raw_val)
 
-    X_train, y_train = train_df[MODEL_FEATURES], train_df["target"]
-    X_val, y_val = val_df[MODEL_FEATURES], val_df["target"]
+    # 4. Out-of-time test evaluation (model + calibrator, and baselines for context)
+    raw_test = trainer.predict_raw(model, test.X)
+    test_metrics = ModelEvaluator.evaluate(test.y, calibrator.predict_proba(raw_test))
+    test_metrics_uncalibrated = ModelEvaluator.evaluate(test.y, raw_test)
+    baseline = trainer.train_baseline_logistic(fit.X, fit.y)
+    baseline_metrics = ModelEvaluator.evaluate(test.y, baseline.predict_proba(test.X[baseline.feature_names_])[:, 1])
+    recency_metrics = ModelEvaluator.evaluate(test.y, 1.0 / (1.0 + test.frame["days_since_last_basket"]))
 
-    # 4. Train Model
-    trainer = ModelTrainer(features=MODEL_FEATURES)
-    lgbm_model = trainer.train_lightgbm(X_train, y_train)
+    # 5. Bundle, gate, promotion
+    bundle = build_bundle(
+        model=model,
+        calibrator=calibrator,
+        features=MODEL_FEATURES,
+        categorical_features=CATEGORICAL_FEATURES,
+        config=cfg,
+        test_metrics=test_metrics,
+        val_metrics=val_metrics,
+        data_fingerprint=raw.fingerprint(),
+        best_iteration=best_iteration,
+        calibration_report=calibration_report,
+    )
+    registry = ModelRegistry(registry_dir=registry_dir)
+    candidate_path = registry.save_candidate(bundle, out_dir / "candidates")
+    quality = registry.evaluate_governance_gate(test_metrics, cfg.gate)
+    comparison = compare_with_champion(
+        challenger_probs=calibrator.predict_proba(raw_test),
+        test_frame=test.frame,
+        champion_path=registry.champion_path,
+        config=cfg,
+    )
+    gate = {"passed": quality["passed"] and comparison["passed"], "quality": quality, "champion_comparison": comparison}
 
-    # 5. Evaluate Raw Predictions
-    raw_val_probs = lgbm_model.predict_proba(X_val)[:, 1]
-    raw_metrics = ModelEvaluator.evaluate(y_val, raw_val_probs)
-
-    # 6. Fit Platt Calibrator
-    calibrator = PlattCalibrator()
-    calibrator.fit(raw_val_probs, y_val.to_numpy())
-    calibrated_val_probs = calibrator.predict_proba(raw_val_probs)
-    calibrated_metrics = ModelEvaluator.evaluate(y_val, calibrated_val_probs)
-
-    # 7. Model Registry Governance Gate & Promotion
-    registry = ModelRegistry()
-    gate_result = registry.evaluate_governance_gate(calibrated_metrics)
-
-    should_promote = gate_result["passed"] or force_promote
+    should_promote = promote and (gate["passed"] or force_promote)
     promoted_path = None
     if should_promote:
-        promoted_path = registry.register_and_promote(
-            model=lgbm_model,
-            features=MODEL_FEATURES,
-            metrics=calibrated_metrics,
-            calibrator=calibrator.calibrator,
-            fit_cutoffs=train_cutoffs,
-            val_cutoffs=[val_cutoff],
-        )
+        reason = "governance gate passed" if gate["passed"] else "force_promote override (gate failed)"
+        promoted_path = registry.register_and_promote(bundle, reason=reason)
+    elif promote:
+        blockers = [k for k in ("quality", "champion_comparison") if not gate[k]["passed"]]
+        logger.warning(f"Candidate NOT promoted: failed {blockers} (force_promote overrides).")
 
-    # 8. Export Feature Importances
-    fi_df = trainer.get_feature_importances(lgbm_model)
-    fi_csv_path = out_dir / "latest_feature_importances.csv"
-    fi_df.to_csv(fi_csv_path, index=False)
-
-    duration = (datetime.datetime.now() - start_time).total_seconds()
+    fi_path = out_dir / "latest_feature_importances.csv"
+    trainer.get_feature_importances(model).to_csv(fi_path, index=False)
 
     summary: Dict[str, Any] = {
         "run_id": run_id,
-        "train_samples": len(train_df),
-        "val_samples": len(val_df),
-        "train_cutoffs": train_cutoffs,
-        "val_cutoff": val_cutoff,
-        "raw_metrics": raw_metrics,
-        "calibrated_metrics": calibrated_metrics,
-        "governance_gate": gate_result,
-        "promoted": should_promote,
+        "bundle_name": bundle["bundle_name"],
+        "config": cfg.to_dict(),
+        "data_source": raw.source,
+        "data_fingerprint": bundle["data_fingerprint"],
+        "git_sha": bundle["git_sha"],
+        "rows": {name: len(s.frame) for name, s in splits.items()},
+        "positive_rate": {name: round(s.positive_rate, 4) for name, s in splits.items()},
+        "best_iteration": best_iteration,
+        "calibration_method": calibrator.method,
+        "calibration_report": calibration_report,
+        "val_metrics": val_metrics,
+        "test_metrics": test_metrics,
+        "test_metrics_uncalibrated": test_metrics_uncalibrated,
+        "baselines": {"logistic_regression": baseline_metrics, "recency_rule": recency_metrics},
+        "governance_gate": gate,
+        "promoted": promoted_path is not None,
         "promoted_path": str(promoted_path) if promoted_path else None,
-        "feature_importances_path": str(fi_csv_path),
-        "duration_seconds": round(duration, 2),
+        "candidate_path": str(candidate_path),
+        "feature_importances_path": str(fi_path),
+        "duration_seconds": round((datetime.datetime.now() - start).total_seconds(), 2),
     }
-
-    manifest_path = out_dir / f"training_manifest_{run_id}.json"
-    manifest_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    logger.info(f"=== Model Retraining Pipeline Finished in {duration:.2f}s (Promoted: {should_promote}) ===")
-
+    (out_dir / f"training_manifest_{run_id}.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+    logger.info(f"=== {run_id} finished in {summary['duration_seconds']}s "
+                f"(test AUC={test_metrics['roc_auc']:.4f}, promoted={summary['promoted']}) ===")
     return summary
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Automated Propensity Retraining Pipeline")
-    parser.add_argument(
-        "--train-cutoffs",
-        type=str,
-        default="250,300,350,400,450",
-        help="Comma-separated training cutoff days (default: 250,300,350,400,450)",
-    )
-    parser.add_argument("--val-cutoff", type=int, default=537, help="Validation cutoff day (default: 537)")
-    parser.add_argument("--horizon", type=int, default=7, help="Prediction horizon in days (default: 7)")
-    parser.add_argument("--force-promote", action="store_true", help="Force promotion even if gate fails")
+    parser = argparse.ArgumentParser(description="Run the propensity retraining pipeline")
+    parser.add_argument("--no-promote", action="store_true", help="Train and evaluate only; never touch the registry")
+    parser.add_argument("--force-promote", action="store_true", help="Promote even if the governance gate fails")
+    parser.add_argument("--data-source", choices=["lakehouse", "csv"], default=None)
     args = parser.parse_args()
-
-    cutoffs = [int(c.strip()) for c in args.train_cutoffs.split(",")]
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     run_training_pipeline(
-        train_cutoffs=cutoffs,
-        val_cutoff=args.val_cutoff,
-        horizon_days=args.horizon,
+        data=DataLoader.load(args.data_source),
+        promote=not args.no_promote,
         force_promote=args.force_promote,
     )

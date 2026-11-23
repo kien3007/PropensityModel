@@ -177,11 +177,8 @@ class MLSystemScheduler:
     def job_monthly_retraining(self) -> Dict[str, Any]:
         """Runs retraining pipeline, checks governance gates, and triggers zero-downtime hot-reload."""
         logger.info("Executing Monthly Model Retraining Pipeline...")
-        summary = run_training_pipeline(
-            train_cutoffs=[250, 300, 350, 400, 450],
-            val_cutoff=537,
-            horizon_days=7,
-        )
+        # Target, splits and hyper-parameters come from src/config/model_config.py.
+        summary = run_training_pipeline()
 
         if summary.get("promoted"):
             logger.info("Model promoted. Triggering Serving Gateway hot-reload via REST API...")

@@ -2,12 +2,10 @@
 Unit tests for Point-in-Time Feature Extraction.
 Verifies strictly DAY <= cutoff, no data leakage, and feature completeness.
 """
-from pathlib import Path
 import pandas as pd
-import numpy as np
-import pytest
 
-from src.features.pit_extractor import PointInTimeFeatureExtractor, MODEL_FEATURES
+from src.features.contract import LEGACY_FEATURES_23
+from src.features.pit_extractor import PointInTimeFeatureExtractor
 
 
 def test_pit_extractor_excludes_future():
@@ -20,7 +18,7 @@ def test_pit_extractor_excludes_future():
     })
 
     cutoff = 10
-    snapshot = PointInTimeFeatureExtractor.extract_features(tx, cutoff=cutoff, feature_cols=MODEL_FEATURES)
+    snapshot = PointInTimeFeatureExtractor.extract_features(tx, cutoff=cutoff, feature_cols=LEGACY_FEATURES_23)
 
     # Check 2,500 households returned
     assert len(snapshot) == 2500
