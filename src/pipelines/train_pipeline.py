@@ -86,14 +86,10 @@ def run_training_pipeline(
     # validation metrics would be in-sample. Its out-of-fold ECE is in calibration_report.
     val_metrics = ModelEvaluator.evaluate(val.y, raw_val)
 
-    # 4. Out-of-time test evaluation (model + calibrator, and baselines for context)
+    # 4. Out-of-time test evaluation (LightGBM + calibrator)
     raw_test = trainer.predict_raw(model, test.X)
     test_metrics = ModelEvaluator.evaluate(test.y, calibrator.predict_proba(raw_test))
     test_metrics_uncalibrated = ModelEvaluator.evaluate(test.y, raw_test)
-    baseline = trainer.train_baseline_logistic(fit.X, fit.y)
-    baseline_metrics = ModelEvaluator.evaluate(test.y, baseline.predict_proba(test.X[baseline.feature_names_])[:, 1])
-    recency_score = heuristic_score(test.frame, cfg.target)
-    recency_metrics = ModelEvaluator.evaluate(test.y, recency_score)
 
     # 5. Bundle, gate, promotion
     bundle = build_bundle(
@@ -131,8 +127,6 @@ def run_training_pipeline(
     # Out-of-time predictions for downstream business evaluation (scripts/target_analysis.py).
     predictions = test.frame[["household_key", "cutoff_day", "target"]].copy()
     predictions["model_probability"] = calibrator.predict_proba(raw_test)
-    predictions["logistic_probability"] = baseline.predict_proba(test.X[baseline.feature_names_])[:, 1]
-    predictions["heuristic_score"] = recency_score.to_numpy()
     predictions_path = out_dir / f"test_predictions_{cfg.target}_{run_id}.parquet"
     predictions.to_parquet(predictions_path, index=False)
 
@@ -155,7 +149,6 @@ def run_training_pipeline(
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
         "test_metrics_uncalibrated": test_metrics_uncalibrated,
-        "baselines": {"logistic_regression": baseline_metrics, "recency_rule": recency_metrics},
         "governance_gate": gate,
         "promoted": promoted_path is not None,
         "promoted_path": str(promoted_path) if promoted_path else None,
@@ -168,14 +161,6 @@ def run_training_pipeline(
     logger.info(f"=== {run_id} finished in {summary['duration_seconds']}s "
                 f"(test AUC={test_metrics['roc_auc']:.4f}, promoted={summary['promoted']}) ===")
     return summary
-
-
-def heuristic_score(frame, target: str):
-    """Rule-of-thumb baseline per target (higher = more likely positive)."""
-    if target == "lapse":
-        overdue = frame["urgency_ratio"]  # days since last basket / own median gap
-        return overdue / (1.0 + overdue)
-    return 1.0 / (1.0 + frame["days_since_last_basket"])
 
 
 if __name__ == "__main__":

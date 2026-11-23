@@ -1,6 +1,6 @@
 """
 Model Training: LightGBM champion candidate (native categoricals, early stopping on the
-validation split) and a numeric-only logistic regression baseline for benchmarking.
+validation split).
 """
 from __future__ import annotations
 
@@ -10,9 +10,6 @@ from typing import Any, Dict, List, Optional
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 
 from src.config.model_config import DEFAULT_TRAINING_CONFIG
 from src.features.contract import CATEGORICAL_FEATURES, MODEL_FEATURES
@@ -72,17 +69,6 @@ class ModelTrainer:
 
     def predict_raw(self, model: lgb.LGBMClassifier, X: pd.DataFrame) -> np.ndarray:
         return model.predict_proba(self._prepare(X))[:, 1]
-
-    def train_baseline_logistic(self, X_train: pd.DataFrame, y_train: pd.Series | np.ndarray) -> Pipeline:
-        """Standardised logistic regression on the numeric features (benchmark only)."""
-        numeric = [f for f in self.features if f not in self.categorical_features]
-        pipe = Pipeline([
-            ("scaler", StandardScaler()),
-            ("classifier", LogisticRegression(max_iter=1000, random_state=42)),
-        ])
-        pipe.fit(X_train[numeric], np.asarray(y_train, dtype=int))
-        pipe.feature_names_ = numeric
-        return pipe
 
     def get_feature_importances(self, model: lgb.LGBMClassifier, importance_type: str = "gain") -> pd.DataFrame:
         importances = model.booster_.feature_importance(importance_type=importance_type)

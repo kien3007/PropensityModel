@@ -28,6 +28,8 @@
 
 ## Tiến độ
 
+> **Quyết định 2026-11-23:** chỉ dùng LightGBM. Pipeline và báo cáo không còn train hay so sánh với các baseline (logistic regression, luật heuristic, chọn ngẫu nhiên). Các con số baseline trong ghi chú Phase 1–3 bên dưới chỉ là số liệu lịch sử. Gate vẫn giữ phần so sánh model mới với champion đang chạy (cùng là LightGBM) trước khi promote.
+
 ### Phase 0: đã xong
 - CI: [.github/workflows/ci.yml](../.github/workflows/ci.yml) chạy `ruff` (bộ rule ghim trong `pyproject.toml`) và `pytest -m "not integration"` kèm coverage.
 - Marker `slow`, `requires_data` (tự skip khi thiếu CSV thật) và `integration`.

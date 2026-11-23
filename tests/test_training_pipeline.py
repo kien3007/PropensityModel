@@ -92,7 +92,7 @@ def test_end_to_end_training_and_promotion(synthetic_data, small_training_config
     assert summary["promoted"] is True
     assert summary["test_metrics"]["roc_auc"] > 0.6
     assert summary["calibration_method"] in {"none", "platt", "isotonic"}
-    assert set(summary["baselines"]) == {"logistic_regression", "recency_rule"}
+    assert "baselines" not in summary  # LightGBM only, no benchmark models
 
     bundle = joblib.load(registry_dir / "champion_model.joblib")
     assert bundle["schema_version"] == 2

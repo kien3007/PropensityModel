@@ -14,7 +14,6 @@ End-to-end ML platform for household-level propensity scoring on Dunnhumby *"The
 
 - Both champions are **reproducible from this repo** (`python -m scripts.reproduce_champion`).
 - Promotion requires a **governance gate**: base-rate-relative quality checks plus non-inferiority versus the active champion.
-- Logistic regression is close behind on both targets (0.856 / 0.809).
 
 Read [docs/MODEL_CARD.md](docs/MODEL_CARD.md) before using the scores.
 
@@ -337,7 +336,6 @@ Details are in [docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md](docs/a
 
 - **Not causal.** Scores rank households and do not measure campaign uplift. At a 14-day horizon, top-decile
   purchase households would mostly buy anyway.
-- **Complexity not yet justified.** Logistic regression is within about 0.007 AUC of LightGBM on both targets.
 - **Fusion rules are heuristics.** The dataset has no real intraday events to calibrate them.
 - **Rate limiting is per process.** Enforce a global limit at the gateway.
 - **Storage profile is unused.** MinIO and Postgres sit behind the optional `storage` profile and are not used by the
