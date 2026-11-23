@@ -24,6 +24,7 @@ from src.models.predictor import PropensityPredictor
 from src.monitoring.drift_detector import DataDriftDetector
 from src.monitoring.metrics import record_drift_metrics
 from src.speed_layer.delta_stream import SpeedLayerProcessor
+from src.serving.batch_store import BatchScoreStore
 from src.training.model_registry import registry_dir_for
 
 logger = logging.getLogger("BatchPipeline")
@@ -37,6 +38,8 @@ def run_batch_pipeline(
     lakehouse_path: Optional[Path | str] = None,
     model_path: Optional[Path | str] = None,
     lapse_model_path: Optional[Path | str] = None,
+    challenger_model_path: Optional[Path | str] = None,
+    batch_store: Optional[BatchScoreStore] = None,
 ) -> Dict[str, Any]:
     """
     Executes the End-to-End Batch Layer Pipeline.
@@ -82,6 +85,25 @@ def run_batch_pipeline(
     scores_df.to_csv(csv_path, index=False)
 
     crm_cols = ["household_key", "purchase_probability", "rank", "decile", "urgency_tier", "marketing_action"]
+
+    # 5b. Publish batch views to the serving layer (Redis when available) for every replica
+    store = batch_store or BatchScoreStore()
+    store.publish(scores_df, "champion", {"run_id": run_id, "snapshot_day": cutoff_day,
+                                          "model_bundle": predictor.bundle_name})
+
+    # 5c. Canary challenger: score the same snapshot so routed traffic gets its own batch view
+    challenger_summary = None
+    challenger_path = challenger_model_path or settings.CHALLENGER_MODEL_PATH
+    if challenger_path:
+        challenger = PropensityPredictor(model_path=challenger_path, expected_target="purchase",
+                                         expected_horizon_days=predictor.horizon_days)
+        challenger_scores = challenger.score_households(snapshot)
+        challenger_parquet = out_dir / f"household_scores_challenger_day_{cutoff_day}.parquet"
+        challenger_scores.to_parquet(challenger_parquet, index=False)
+        store.publish(challenger_scores, "challenger", {"run_id": run_id, "snapshot_day": cutoff_day,
+                                                        "model_bundle": challenger.bundle_name})
+        challenger_summary = {"model_bundle": challenger.bundle_name, "parquet": str(challenger_parquet),
+                              "mean_propensity": float(challenger_scores["purchase_probability"].mean())}
     scores_df[crm_cols].to_csv(crm_csv_path, index=False)
 
     # 6. Evaluate Model & Data Drift against Gold Baseline
@@ -132,11 +154,15 @@ def run_batch_pipeline(
         "lakehouse_records_saved": records_saved,
         "drift_audit": drift_summary,
         "lapse_risk": lapse_summary,
+        "challenger": challenger_summary,
+        "challenger_bundle": challenger_summary["model_bundle"] if challenger_summary else None,
+        "serving_store_backend": store.backend,
         "duration_seconds": round(duration, 2),
         "artifacts": {
             "parquet": str(parquet_path),
             "csv": str(csv_path),
             "crm_csv": str(crm_csv_path),
+            **({"challenger_parquet": challenger_summary["parquet"]} if challenger_summary else {}),
         },
     }
 
@@ -182,6 +208,7 @@ def score_lapse_risk(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Enterprise Batch Scoring Pipeline")
     parser.add_argument("--cutoff", type=int, default=711, help="Cutoff snapshot day (default: 711)")
+    parser.add_argument("--challenger", default=None, help="Challenger bundle to score for canary traffic")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    run_batch_pipeline(cutoff_day=args.cutoff)
+    run_batch_pipeline(cutoff_day=args.cutoff, challenger_model_path=args.challenger)

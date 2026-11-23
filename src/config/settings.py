@@ -49,6 +49,25 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = None
     REDIS_TTL_SECONDS: int = 86400  # 24 Hours
 
+    # Production hardening. STRICT_INFRA=true disables every silent in-memory fallback:
+    # the service fails fast if Redis (or an enabled Kafka) is unreachable.
+    STRICT_INFRA: bool = False
+    EVENT_DEDUP_TTL_SECONDS: int = 86400
+
+    # Serving API security. Comma-separated keys accepted in the X-API-Key header for write,
+    # admin and bulk-export endpoints. Empty = open in development, rejected in production.
+    SERVING_API_KEYS: str = ""
+    RATE_LIMIT_PER_MINUTE: int = 600
+
+    # Canary: optional challenger bundle scored by the batch layer alongside the champion.
+    CHALLENGER_MODEL_PATH: Optional[Path] = None
+
+    # Lambda fusion rules (HEURISTIC, not learned; to be calibrated from feedback data).
+    FUSION_PURCHASE_DAMPENING: float = 0.25    # multiply P after an intraday checkout
+    FUSION_COUPON_BOOST_PER_CLIP: float = 0.15  # add per coupon clipped today
+    FUSION_APP_NUDGE: float = 0.05             # add after repeated app interactions
+    FUSION_APP_MIN_INTERACTIONS: int = 2
+
     # Streaming Event Bus (Kafka)
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
     KAFKA_TOPIC_EVENTS: str = "pos-intraday-events"
