@@ -1,251 +1,71 @@
-version: "3.8"
+# ==============================================================================
+# Propensity platform - on-premise Lambda stack.
+#
+#   cp .env.example .env            # fill in the secrets (compose refuses to start without them)
+#   docker compose up -d --build    # serving + speed layer + scheduler + observability
+#   docker compose --profile tools run --rm batch-pipeline     # one-off batch scoring
+#   python -m scripts.e2e_smoke     # full end-to-end smoke test in an isolated project
+#
+# Shared state lives in named volumes: lakehouse_data (DuckDB + Bronze Parquet),
+# outputs_data (batch artefacts, monitoring reports) and models_data (champion registry,
+# seeded from the image on first use, so containers never write into the git checkout).
+# Raw Dunnhumby CSVs are mounted read-only from RAW_DATA_DIR.
+# Postgres / MinIO are not used by the application code; they are kept behind the
+# optional "storage" profile.
+# ==============================================================================
+
+x-app-env: &app-env
+  ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  KAFKA_ENABLED: "true"
+  STRICT_INFRA: ${STRICT_INFRA:-true}
+  SERVING_API_KEYS: ${SERVING_API_KEYS:?set SERVING_API_KEYS in .env}
+  DATA_RAW_DIR: /app/sample_data/dunnhumby
+  LAKEHOUSE_PATH: /app/data/lakehouse/propensity_warehouse.duckdb
+  OUTPUT_DIR: /app/data/outputs
+  MODEL_PATH: /app/models/champion_model.joblib
+
+x-pipeline: &pipeline
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.pipeline
+  image: propensity-pipeline:local
+  environment:
+    <<: *app-env
+  volumes:
+    - ${RAW_DATA_DIR:?set RAW_DATA_DIR in .env}:/app/sample_data/dunnhumby:ro
+    - lakehouse_data:/app/data/lakehouse
+    - outputs_data:/app/data/outputs
+    - models_data:/app/models
 
 services:
-  # ============================================================================
-  # 1. OLTP Database (PostgreSQL 16)
-  # ============================================================================
-  postgres:
-    image: postgres:16-alpine
-    container_name: propensity_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: propensity_oltp
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_secure_pwd
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d propensity_oltp"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ============================================================================
-  # 2. Master Dataset Object Store (MinIO S3 Compatible)
-  # ============================================================================
-  minio:
-    image: minio/minio:RELEASE.2024-03-30T09-41-56Z
-    container_name: propensity_minio
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Bucket Initializer for MinIO
-  minio-init:
-    image: minio/mc:latest
-    container_name: propensity_minio_init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
-      /usr/bin/mc mb --ignore-existing myminio/lakehouse-master;
-      /usr/bin/mc mb --ignore-existing myminio/lakehouse-bronze;
-      /usr/bin/mc mb --ignore-existing myminio/mlflow-artifacts;
-      exit 0;
-      "
-
-  # ============================================================================
-  # 3. Speed & Serving Layer Cache (Redis 7)
-  # ============================================================================
+  # ---------------------------------------------------------------- core infrastructure
   redis:
     image: redis:7-alpine
-    container_name: propensity_redis
     restart: unless-stopped
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
 
-  # ============================================================================
-  # 4. Serving Layer: FastAPI Unified Fusion Gateway
-  # ============================================================================
-  serving-api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.serving
-    container_name: propensity_serving_api
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      - ENV=production
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=propensity_oltp
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres_secure_pwd
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - LAKEHOUSE_PATH=/app/data/lakehouse/propensity_warehouse.duckdb
-      - MODEL_PATH=/app/models/champion_model.joblib
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      # Required in production: admin/write endpoints fail closed (503) without keys.
-      - SERVING_API_KEYS=${SERVING_API_KEYS:-}
-      - STRICT_INFRA=${STRICT_INFRA:-false}
-    ports:
-      - "8000:8000"
-    volumes:
-      - lakehouse_data:/app/data/lakehouse
-
-  # ============================================================================
-  # 5. Batch Layer: Weekly Batch Scoring & Pipeline Runner (On-Demand)
-  # ============================================================================
-  batch-pipeline:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.pipeline
-    container_name: propensity_batch_pipeline
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - LAKEHOUSE_PATH=/app/data/lakehouse/propensity_warehouse.duckdb
-      - MODEL_PATH=/app/models/champion_model.joblib
-    volumes:
-      - lakehouse_data:/app/data/lakehouse
-    profiles:
-      - tools # Only runs on demand: docker compose --profile tools run batch-pipeline
-
-  # ============================================================================
-  # 6. Automated Scheduler: Cron Daemon for Weekly Batch & Monthly Retraining
-  # ============================================================================
-  scheduler:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.pipeline
-    container_name: propensity_scheduler
-    restart: unless-stopped
-    command: ["python", "-m", "src.scheduler.daemon", "--poll-interval", "30", "--serving-url", "http://serving-api:8000"]
-    depends_on:
-      - serving-api
-      - postgres
-      - minio
-      - redis
-    environment:
-      - ENV=production
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=propensity_oltp
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres_secure_pwd
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - LAKEHOUSE_PATH=/app/data/lakehouse/propensity_warehouse.duckdb
-      - MODEL_PATH=/app/models/champion_model.joblib
-      - SERVING_API_KEYS=${SERVING_API_KEYS:-}
-    volumes:
-      - lakehouse_data:/app/data/lakehouse
-      - ./models:/app/models
-      - ./output:/app/output
-
-  # ============================================================================
-  # 7. Observability: Prometheus Metrics Collector
-  # ============================================================================
-  prometheus:
-    image: prom/prometheus:v2.51.0
-    container_name: propensity_prometheus
-    restart: unless-stopped
-    ports:
-      - "9090:9090"
-    depends_on:
-      - alertmanager
-    volumes:
-      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./docker/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
-      - prometheus_data:/prometheus
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--web.enable-lifecycle"
-
-  # ============================================================================
-  # 7b. Alert routing: Alertmanager (Port 9093)
-  # ============================================================================
-  alertmanager:
-    image: prom/alertmanager:v0.27.0
-    container_name: propensity_alertmanager
-    restart: unless-stopped
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./docker/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    command:
-      - "--config.file=/etc/alertmanager/alertmanager.yml"
-
-  # ============================================================================
-  # 8. Observability Dashboard: Grafana (Port 3000)
-  # ============================================================================
-  grafana:
-    image: grafana/grafana:10.4.0
-    container_name: propensity_grafana
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
-
-  # ============================================================================
-  # 9. Streaming Message Bus (Apache Kafka KRaft Mode - Zero Zookeeper)
-  # ============================================================================
   kafka:
     image: confluentinc/cp-kafka:7.5.0
-    container_name: propensity_kafka
     restart: unless-stopped
     ports:
-      - "9092:9092"
+      - "${KAFKA_HOST_PORT:-9092}:9092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092}"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -255,38 +75,179 @@ services:
       KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092"
       KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
       CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
     volumes:
       - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
 
-  # ============================================================================
-  # 10. Kafka Stream Worker: Background Event Consumer to Redis
-  # ============================================================================
-  kafka-consumer:
+  # ---------------------------------------------------------------- serving & speed layer
+  serving-api:
     build:
       context: .
-      dockerfile: docker/Dockerfile.pipeline
-    container_name: propensity_kafka_consumer
+      dockerfile: docker/Dockerfile.serving
+    image: propensity-serving:local
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    ports:
+      - "${SERVING_HOST_PORT:-8000}:8000"
+    volumes:
+      - models_data:/app/models
+      - outputs_data:/app/data/outputs
+    # Liveness is the image HEALTHCHECK (/health); readiness (/ready) waits for batch views.
+
+  kafka-consumer:
+    <<: *pipeline
     restart: unless-stopped
     command: ["python", "-m", "src.speed_layer.kafka_bus", "--mode", "consumer"]
     depends_on:
-      - kafka
-      - redis
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
-      - ENV=production
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CONSUMER_METRICS_PORT=9101
+      <<: *app-env
+      CONSUMER_METRICS_PORT: "9101"
     expose:
       - "9101"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9101/metrics', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------- batch & orchestration
+  batch-pipeline:
+    <<: *pipeline
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - tools # docker compose --profile tools run --rm batch-pipeline [cmd]
+
+  scheduler:
+    <<: *pipeline
+    restart: unless-stopped
+    command: ["python", "-m", "src.scheduler.daemon", "--poll-interval", "30", "--serving-url", "http://serving-api:8000"]
+    depends_on:
+      serving-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- observability
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    restart: unless-stopped
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+    ports:
+      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    ports:
+      - "${ALERTMANAGER_HOST_PORT:-9093}:9093"
+    volumes:
+      - ./docker/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      - "${GRAFANA_HOST_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------- optional storage profile
+  # Not used by the application code today. MinIO's community images are no longer
+  # published on Docker Hub; set MINIO_IMAGE to an image you have access to.
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["storage"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-propensity_oltp}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2024-03-30T09-41-56Z}
+    profiles: ["storage"]
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  postgres_data:
-  minio_data:
   redis_data:
+  kafka_data:
   lakehouse_data:
+  outputs_data:
+  models_data:
   prometheus_data:
   grafana_data:
-  kafka_data:
+  postgres_data:
+  minio_data:

@@ -1,24 +1,20 @@
 # ==============================================================================
-# Production Dockerfile for Batch Scoring & Data Transformation Pipeline
+# Batch / training / scheduler / Kafka-consumer image. Raw Dunnhumby CSVs are mounted
+# read-only at /app/sample_data/dunnhumby at run time (RAW_DATA_DIR in .env), never baked in.
 # ==============================================================================
 FROM python:3.10-slim
 
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libgomp1 \
-    curl \
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libgomp1 curl git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
-
+COPY pyproject.toml README.md ./
 COPY src/ ./src/
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
+
+COPY dags/ ./dags/
+COPY scripts/ ./scripts/
 COPY models/ ./models/
-COPY sample_data/ ./sample_data/
 
 ENV PYTHONPATH=/app
-
 CMD ["python", "-m", "src.pipelines.batch_pipeline", "--cutoff", "711"]

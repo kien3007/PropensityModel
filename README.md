@@ -1,242 +1,182 @@
-# Enterprise Lambda Architecture: Household Purchase Propensity Platform
+# Household Purchase Propensity Platform (Lambda Architecture)
 
-An end-to-end Enterprise Machine Learning system designed for household purchase propensity scoring on retail datasets (Dunnhumby *"The Complete Journey"* - 2,500 households, 2.59M transactions, 711 days).
+End-to-end ML platform for household-level propensity scoring on Dunnhumby *"The Complete Journey"*
+(2,500 households, 2.59M transactions, DAY 1–711).
+- A **batch layer** trains and scores point-in-time models.
+- A **speed layer** applies intraday events from Kafka.
+- A **serving layer** fuses both behind an authenticated FastAPI gateway.
+- **Monitoring** compares drift and realized accuracy against what each champion was accepted with, and triggers retraining.
 
-Built with a strict **Lambda Architecture** (Batch Layer, Speed Layer, Serving Layer) to satisfy high-accuracy historical propensity while reacting within milliseconds to intraday shopping events. Designed **On-Premise first** with a **Zero-Downtime Cloud Migration Strategy** to AWS / GCP.
+| Model | Question | OOT ROC-AUC | Lift@10% | Registry |
+|---|---|---|---|---|
+| `purchase` | ≥ 1 basket in the next 14 days (all households) | 0.859 | 1.42× (max 1.43×) | `models/` |
+| `lapse` | regular shopper buys nothing in the next 21 days | 0.816 | 3.02× (max 9.4×) | `models/lapse/` |
+
+- Both champions are **reproducible from this repo** (`python -m scripts.reproduce_champion`).
+- Promotion requires a **governance gate**: base-rate-relative quality checks plus non-inferiority versus the active champion.
+- Logistic regression is close behind on both targets (0.856 / 0.809).
+
+Read [docs/MODEL_CARD.md](docs/MODEL_CARD.md) before using the scores.
+
+Documentation:
+- [Model card](docs/MODEL_CARD.md): targets, data, metrics, limits.
+- [Runbook](docs/RUNBOOK.md): jobs, retrain / promote / rollback, alert handling.
+- [Target & business-value analysis](docs/analysis/TARGET_ANALYSIS.md).
+- [Implementation plan & status](docs/IMPLEMENTATION_PLAN.md).
+- [Architecture spec](docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md), [Excalidraw diagram](docs/architecture/lambda_architecture.excalidraw).
+- [Archived CRISP-DM / EDA work](docs/analysis/archive_crisp_dm/README.md).
 
 ---
 
-## 1. High-Level Architecture
-
-The platform separates long-term lookback feature extraction from real-time intraday events, unifying them at inference time:
+## 1. Architecture
 
 ```mermaid
 flowchart TD
-    subgraph DataSources["Data Sources & Ingestion"]
-        POS["POS Terminals / Web / App (CSV / CDC Stream)"]
-        RawMaster["MinIO S3 / GCS (Immutable Master Dataset)"]
+    subgraph Sources["Sources"]
+        CSV["Dunnhumby CSVs (RAW_DATA_DIR, read-only)"]
+        POS["POS / app events"]
     end
 
-    subgraph EventStreaming["High-Throughput Streaming Bus"]
-        Kafka["Apache Kafka (KRaft Broker)<br/>Topic: pos-intraday-events"]
-        Consumer["Kafka Stream Consumer Worker<br/>SpeedLayerProcessor"]
+    subgraph Batch["Batch layer"]
+        Bronze["DuckDB Lakehouse - Bronze Parquet"]
+        Loader["DataLoader -> RawDataBundle"]
+        Features["MultiDomainFeatureBuilder<br/>28 point-in-time features (DAY <= t0)"]
+        Train["Train pipeline<br/>LightGBM + calibration + governance gate"]
+        Registry["Model registry<br/>champion / history / rollback"]
+        Score["Batch scoring<br/>purchase + lapse (+ challenger)"]
+        Gold["Gold: fct_weekly_batch_scores,<br/>fct_model_attribution"]
     end
 
-    subgraph BatchLayer["Batch Layer (High Latency, High Accuracy)"]
-        DuckDB["DuckDB Medallion Lakehouse<br/>Bronze -> Silver -> Gold"]
-        PIT["Point-in-Time Feature Extractor<br/>(DAY <= t0, Zero Future Leakage)"]
-        Feast["Feast Feature Store<br/>Offline Parquet + Online Store"]
-        Champion["Calibrated LightGBM (28 Multi-Domain)<br/>Isotonic Calibration (ROC-AUC: 0.8600)"]
-        BatchScores["Gold Mart: fct_weekly_batch_scores<br/>Deciles 1-10 & Marketing Actions"]
-        Feedback["Ground-Truth Feedback Loop<br/>fct_model_attribution (Realized AUC)"]
+    subgraph Speed["Speed layer"]
+        Kafka["Kafka topic pos-intraday-events"]
+        Consumer["Consumer worker (idempotent on event_id)"]
+        Delta["Redis realtime:delta:{hh}"]
     end
 
-    subgraph SpeedLayer["Speed Layer (Low Latency, Real-Time Deltas)"]
-        RedisDelta["Redis In-Memory Key-Value Store<br/>realtime:delta:{hh_key} (TTL 24h)"]
+    subgraph Serving["Serving layer"]
+        Store["Redis BatchScoreStore<br/>batch:{champion,challenger}:scores"]
+        API["FastAPI gateway<br/>API keys, rate limit, /ready"]
+        Fusion["Fusion: P = f(P_batch, intraday delta)<br/>canary routing, cold start"]
     end
 
-    subgraph ServingLayer["Serving Layer & Canary Routing"]
-        FastAPI["FastAPI Serving Gateway (Port 8000)"]
-        Canary["Canary A/B Router<br/>(90% Champion / 10% Challenger)"]
-        Fusion["Lambda Fusion Engine<br/>P_unified = Merge(P_batch, Delta_speed)"]
-        Prometheus["Prometheus & Grafana<br/>Metrics & P99 Latency"]
+    subgraph Monitoring["Monitoring"]
+        Drift["Drift vs champion OOT window"]
+        Feedback["Realized AUC vs accepted AUC"]
+        Policy["Retraining policy"]
+        Prom["Prometheus + Alertmanager + Grafana"]
     end
 
-    POS --> RawMaster
-    POS -.->|Stream Events| Kafka
-    Kafka --> Consumer
-    Consumer --> RedisDelta
-
-    RawMaster --> DuckDB
-    DuckDB --> PIT
-    PIT --> Feast
-    Feast --> Champion
-    Champion --> BatchScores
-    BatchScores -->|Attribution Join| Feedback
-    DuckDB -->|Realized Sales (t0..t0+H)| Feedback
-    BatchScores -->|Precomputed Baseline| Fusion
-
-    RedisDelta -->|Live Deltas| Fusion
-    FastAPI --> Canary
-    Canary --> Fusion
-    FastAPI -.->|Scrape /metrics| Prometheus
+    CSV --> Bronze --> Loader --> Features
+    Features --> Train --> Registry
+    Registry --> Score
+    Features --> Score
+    Score --> Gold
+    Score --> Store
+    POS --> API -->|events| Kafka --> Consumer --> Delta
+    Store --> Fusion
+    Delta --> Fusion
+    API --> Fusion
+    Score --> Drift
+    Gold --> Feedback
+    Drift --> Policy
+    Feedback --> Policy
+    Policy -->|retrain candidate| Train
+    API -->|/metrics| Prom
+    Consumer -->|:9101/metrics| Prom
 ```
 
-### Visual Excalidraw Diagram
-- Interactive Excalidraw blueprint: [`docs/architecture/lambda_architecture.excalidraw`](file:///c:/Users/kienn/PropensityVSF/docs/architecture/lambda_architecture.excalidraw)
-- Detailed Technical Specification: [`docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md`](file:///c:/Users/kienn/PropensityVSF/docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md)
+Design rules that hold everywhere:
+- **One feature contract** ([src/features/contract.py](src/features/contract.py)) and one feature code path, shared by training, batch scoring and the feature store. Parity is tested: CSV vs Lakehouse, and training rows vs batch rows.
+- **One model definition** ([src/config/model_config.py](src/config/model_config.py)): target, horizon, temporal splits, hyper-parameters and gate. Every pipeline, DAG and the scheduler read it.
+- **Self-describing bundles (schema v2):** target, feature set, horizon, cutoffs, data fingerprint and git SHA. The predictor refuses bundles that do not match the contract.
 
 ---
 
 ## 2. Repository Structure
 
 ```
-PropensityVSF/
-├── docker-compose.yml              # On-premise infrastructure orchestration
-├── pyproject.toml                  # Modern Python packaging & dependencies
-├── .env.example                    # Template environment variables
-├── docker/
-│   ├── Dockerfile.serving          # Multi-stage production container for FastAPI Serving
-│   ├── Dockerfile.pipeline         # Container for Lakehouse ETL, training & batch scoring
-│   ├── prometheus.yml              # Prometheus scraping configuration (Serving API /metrics)
-│   ├── grafana/                    # Grafana pre-provisioned data sources & MLOps dashboards
-│   └── minio_init.sh               # MinIO S3 bucket provisioning script
-├── dags/
-│   ├── dag_weekly_batch_propensity.py    # Apache Airflow / Cloud Composer DAG for weekly batch scoring
-│   ├── dag_monthly_model_retraining.py  # Apache Airflow DAG for monthly retraining & hot-reload
-│   └── dag_ground_truth_feedback_loop.py # Apache Airflow DAG for weekly realized accuracy attribution
-├── docs/
-│   └── architecture/
-│       ├── LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md  # Master architectural specification
-│       └── lambda_architecture.excalidraw          # Interactive Excalidraw visual diagram
-├── feature_repo/
-│   ├── feature_store.yaml          # Feast Feature Store configuration (Offline Parquet + Online Store)
-│   ├── entities.py                 # Feast Entity definitions (household_key)
-│   └── features.py                 # 28 Multi-domain Point-in-Time FeatureView definitions
-├── models/
-│   ├── champion_model.joblib       # Active Champion LightGBM bundle (28 features, Isotonic calibrated, AUC: 0.8600)
-│   ├── latest_model_manifest.json  # Manifest with metrics, validation scores & cutoffs
-│   └── history/                    # Timestamped archives of promoted champion models
+├── docker-compose.yml        # Full stack (see section 3); .env.example lists the required secrets
+├── Makefile                  # Shortcuts for the commands below
+├── dags/                     # Airflow DAGs: weekly batch (+ drift), monthly retraining, feedback
+├── docker/                   # Dockerfiles, Prometheus config + alert rules (+ promtool tests),
+│                             # Alertmanager, Grafana provisioning
+├── docs/                     # Model card, runbook, analysis, plan, architecture, CRISP-DM archive
+├── feature_repo/             # Feast definitions (optional offline/online store)
+├── models/                   # Tracked champions: purchase (root) and lapse/ (+ history/, ignored)
+├── scripts/                  # reproduce_champion, registry CLI, target_analysis, load_test, e2e_smoke
 ├── src/
-│   ├── common/
-│   │   └── logger.py               # Enterprise logging configuration
-│   ├── config/
-│   │   └── settings.py             # Pydantic v2 type-safe settings & environment validation
-│   ├── features/
-│   │   └── pit_extractor.py        # Point-in-Time feature extractor (strictly DAY <= t0)
-│   ├── lakehouse/
-│   │   └── engine.py               # DuckDB Parquet Medallion Lakehouse & DQ Framework
-│   ├── feature_store/
-│   │   └── client.py               # Feast FeatureStoreClient (PIT retrieval & online materialization)
-│   ├── models/
-│   │   └── predictor.py            # Champion model predictor, decile & urgency assignment
-│   ├── monitoring/
-│   │   ├── drift_detector.py       # DataDriftDetector (PSI, KS-test, Covariate shift audit)
-│   │   ├── feedback_loop.py        # GroundTruthFeedbackLoop (Realized AUC, Brier, Lift attribution)
-│   │   └── metrics.py              # Prometheus instrumentation (P50/P95/P99 latency, RPS, Deciles, PSI, Routing)
-│   ├── pipelines/
-│   │   ├── batch_pipeline.py       # Weekly batch scoring pipeline runner
-│   │   └── train_pipeline.py       # Retraining & promotion pipeline (config: src/config/model_config.py)
-│   ├── scheduler/
-│   │   └── daemon.py               # Automated Scheduler Daemon (zero-dependency cron orchestrator)
-│   ├── serving/
-│   │   ├── api.py                  # FastAPI REST microservice endpoints & canary management
-│   │   ├── canary_router.py        # A/B Testing & Canary Router (deterministic hash routing)
-│   │   └── fusion_engine.py        # Lambda Serving Fusion Engine (P_batch + Delta_speed)
-│   ├── speed_layer/
-│   │   ├── delta_stream.py         # Real-time event ingestion & Redis delta management
-│   │   └── kafka_bus.py            # High-throughput Kafka Event Producer & Consumer Stream Worker
-│   └── training/
-│       ├── dataset_builder.py      # Multi-cutoff temporal training data & target generator
-│       ├── trainer.py              # LightGBM classifier & baseline Logistic Regression trainer
-│       ├── calibrator.py           # None / Platt / Isotonic calibrators, chosen by cross-fitted ECE
-│       ├── evaluator.py            # Metrics (ROC-AUC, Brier score, Log loss, Lift@10%)
-│       └── model_registry.py       # Champion/Challenger quality gates & model bundle packager
-└── tests/
-    ├── test_canary_routing.py      # Canary Router & dynamic A/B weight allocation tests
-    ├── test_feature_store.py       # Feast Feature Store (registry, online materialization & PIT retrieval)
-    ├── test_features_pit.py        # Point-in-Time leakage & feature boundary tests
-    ├── test_feedback_loop.py       # Ground-Truth Feedback Loop & Gold Lakehouse attribution tests
-    ├── test_kafka_bus.py           # Kafka Event Producer, dual-dispatch & stream worker tests
-    ├── test_lakehouse.py           # Bronze/Silver/Gold Lakehouse & Data Quality tests
-    ├── test_lambda_fusion.py       # Lambda Serving fusion rules unit tests
-    ├── test_monitoring.py          # Data Drift (PSI, KS-test) & Prometheus metrics tests
-    ├── test_scheduler.py           # Scheduler daemon, triggers & Airflow DAGs tests
-    ├── test_serving_api.py         # FastAPI REST endpoint & hot-reload integration tests
-    └── test_training_pipeline.py   # Training, calibration, evaluator & registry gate tests
+│   ├── config/               # settings.py (env), model_config.py (model definition + gates)
+│   ├── data/                 # DataLoader: CSV or Lakehouse Bronze -> RawDataBundle
+│   ├── features/             # contract, point-in-time extractor, targets (purchase / lapse)
+│   ├── training/             # dataset builder, trainer, calibrators, evaluator, statistics,
+│   │                         # champion/challenger comparison, model registry
+│   ├── models/               # predictor (bundle validation, scoring, tiers)
+│   ├── pipelines/            # train_pipeline, batch_pipeline
+│   ├── serving/              # api, fusion engine, batch store, canary router, security
+│   ├── speed_layer/          # Redis deltas, Kafka producer / consumer
+│   ├── monitoring/           # drift, reference, feedback, retraining policy, state, metrics
+│   ├── lakehouse/            # DuckDB medallion engine + data-quality checks
+│   ├── scheduler/            # dependency-free cron daemon
+│   └── common/               # logging, Redis connection factory
+└── tests/                    # unit + pipeline tests on a synthetic fixture (tests/fixtures)
 ```
 
 ---
 
 ## 3. Quick Start
 
-### Option A: Complete Docker Compose Stack (Recommended)
-
-Start PostgreSQL 16 (OLTP), MinIO S3 (Lakehouse Master), Redis 7 (Speed/Serving Cache), FastAPI Serving API, and Batch Pipeline Runner:
+### Docker Compose (full stack)
 
 ```bash
-# 1. Copy environment template
-cp .env.example .env
-
-# 2. Build and launch all services
-docker compose up -d
-
-# 3. View service status
-docker compose ps
+cp .env.example .env     # set RAW_DATA_DIR (absolute path to the CSV folder), SERVING_API_KEYS,
+                         # GRAFANA_ADMIN_PASSWORD; compose refuses to start without them
+docker compose up -d --build                               # serving, Kafka + consumer, scheduler, observability
+docker compose --profile tools run --rm batch-pipeline     # first batch -> /ready turns 200
 ```
 
-Service URLs:
-- **FastAPI Serving API**: [http://localhost:8000](http://localhost:8000) (Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs))
-- **Prometheus Metrics Engine**: [http://localhost:9090](http://localhost:9090) (Scrapes `http://localhost:8000/metrics`)
-- **Grafana MLOps Dashboard**: [http://localhost:3000](http://localhost:3000) (User: `admin` / `admin` - Pre-configured live dashboard)
-- **Apache Kafka KRaft Broker**: `localhost:9092` (Topic: `pos-intraday-events`, KRaft cluster mode)
-- **MinIO S3 Console**: [http://localhost:9001](http://localhost:9001) (User: `minioadmin` / `minioadmin`)
-- **PostgreSQL OLTP**: `localhost:5432` (`propensity_oltp`)
-- **Redis Cache**: `localhost:6379`
+| Service | URL |
+|---|---|
+| Serving API | http://localhost:8000 (Swagger at `/docs`) |
+| Prometheus / Alertmanager | http://localhost:9090 / http://localhost:9093 |
+| Grafana | http://localhost:3000 (`admin` / `GRAFANA_ADMIN_PASSWORD`) |
+| Kafka | `localhost:9092` (topic `pos-intraday-events`) |
+| Redis | `localhost:6379` |
 
-### Option B: Local Development Environment
+**End-to-end check:** `python -m scripts.e2e_smoke [--data real|synthetic]` builds the images and starts an isolated
+compose project. It then runs batch scoring, training, feedback and a Kafka speed event, checks Prometheus
+and Alertmanager, and tears everything down. CI runs it nightly on synthetic data (`.github/workflows/e2e.yml`).
+
+### Local development
 
 ```bash
-# 1. Install dependencies
 pip install -e ".[dev]"
+# Local runs without Redis/Kafka need STRICT_INFRA=false (the default when no .env is present).
 
-# 2. Retrain the champion definition from src/config/model_config.py
-#    (28 features, 14-day horizon, fit/val/test cutoffs, calibration chosen on validation).
-#    --no-promote: evaluate only; --force-promote: promote even if the gate fails.
-python -m src.pipelines.train_pipeline --no-promote
-
-# 2b. Check the active champion is reproducible from this repo (|dAUC| <= 0.01 on the OOT test cutoffs)
-python -m scripts.reproduce_champion
-
-# 2c. Second model: 21-day lapse risk of regular shoppers (registry: models/lapse/)
-python -m src.pipelines.train_pipeline --target lapse
-python -m scripts.registry --target lapse list
-
-# 2d. Target & business-value analysis -> docs/analysis/TARGET_ANALYSIS.md
-python -m scripts.target_analysis
-
-# 3. Run the weekly batch scoring pipeline (also writes lapse_risk_day_<cutoff>.csv if a lapse champion exists)
-python -m src.pipelines.batch_pipeline --cutoff 711
-
-# 4. Start the FastAPI Serving Gateway
-uvicorn src.serving.api:app --host 0.0.0.0 --port 8000 --reload
+python -m src.pipelines.train_pipeline --target purchase --no-promote   # evaluate only
+python -m src.pipelines.train_pipeline --target lapse                   # promote if the gate passes
+python -m scripts.reproduce_champion --target purchase                  # |dAUC| <= 0.01 vs active champion
+python -m scripts.registry --target purchase list                       # versions; rollback [--to V]
+python -m scripts.target_analysis                                       # docs/analysis/TARGET_ANALYSIS.md
+python -m src.pipelines.batch_pipeline --cutoff 711                     # scores + lapse list + drift audit
+uvicorn src.serving.api:app --port 8000
 ```
 
 ---
 
 ## 4. Automated Scheduling & Production Orchestration
 
-The platform provides dual-track scheduling designed for both standalone on-premise execution and managed cloud environments (Google Cloud Composer / AWS MWAA):
-
-| Pipeline Job | Production Schedule | Orchestration Target | Description |
+| Job | Schedule | Entry point | What it does |
 |---|---|---|---|
-| **Weekly Batch Scoring** | Every Monday at 02:00 UTC (`0 2 * * 1`) | `src.pipelines.batch_pipeline` | Ingests new POS data, extracts 28 Point-in-Time features, scores 2,500 households, updates Gold Lakehouse mart, exports CRM audience, and clears intraday deltas. |
-| **Monthly Model Retraining** | 1st of month at 03:00 UTC (`0 3 1 * *`) | `src.pipelines.train_pipeline` | Builds multi-cutoff temporal training data, retrains LightGBM candidate, evaluates the governance gate (base-rate-relative quality checks + non-inferiority vs. the active champion on the same OOT test rows), promotes atomically, and calls webhook to hot-reload serving. Roll back with `python -m scripts.registry rollback`. |
-| **Daily Data Quality Audit** | Every day at 01:00 UTC (`0 1 * * *`) | `LakehouseEngine.run_data_quality_framework` | Verifies row counts, checks for negative pricing/quantity anomalies, validates temporal bounds, and ensures schema conformity. |
-| **Weekly Ground-Truth Feedback** | Every Wednesday at 04:00 UTC (`0 4 * * 3`) | `GroundTruthFeedbackLoop.run_weekly_feedback` | Prospective 7-14 day attribution: joins past batch predictions with realized POS transactions, measures Realized ROC-AUC, Brier score, and Top Decile Lift, persisting to Gold Lakehouse `fct_model_attribution`. |
+| Weekly batch | Mon 02:00 UTC | `src.pipelines.batch_pipeline` | Bronze ingest, 28 PIT features, score purchase (+ challenger) and lapse, Gold + Redis batch views, CRM / retention exports, drift audit (retrain if CRITICAL) |
+| Monthly retraining | 1st of month 03:00 UTC | `src.pipelines.train_pipeline` (both targets) | Train, calibrate, evaluate OOT, governance gate, atomic promotion, serving hot-reload |
+| Daily data quality | 01:00 UTC | `LakehouseEngine.run_data_quality_framework` | Row counts, negative values, household coverage |
+| Weekly feedback | Wed 04:00 UTC | `GroundTruthFeedbackLoop` | Realized AUC per target on the latest matured cutoff, fusion-rule calibration, retrain if degraded |
 
-### Track 1: Lightweight Scheduler Daemon (On-Premise / Docker Compose)
-Implemented with zero external dependencies in `src.scheduler.daemon.py`. Integrated directly into `docker-compose.yml` under the `scheduler` service:
+There are two ways to run these jobs:
+- **Dependency-free scheduler** (`src/scheduler/daemon.py`, compose service `scheduler`): run a single job with `--run-job batch|retrain|dq|feedback`.
+- **Airflow DAGs** in `dags/`: same jobs, same configuration.
 
-```bash
-# Run scheduler daemon locally (polls every 30s)
-python -m src.scheduler.daemon --poll-interval 30 --serving-url http://localhost:8000
-
-# Execute all jobs immediately once (smoke testing / verification)
-python -m src.scheduler.daemon --run-once-all
-
-# Execute a single on-demand job (batch | retrain | dq)
-python -m src.scheduler.daemon --run-job batch
-
-# Launch within Docker Compose
-docker compose up -d scheduler
-```
-
-### Track 2: Enterprise Apache Airflow / Google Cloud Composer DAGs
-Production-ready Airflow DAGs located in `dags/` featuring automatic retry policies, XCom parameter passing, and cross-platform fallbacks:
-- `dags/dag_weekly_batch_propensity.py`: Orchestrates weekly batch scoring, Lakehouse sync, and marketing segment materialization.
-- `dags/dag_monthly_model_retraining.py`: Orchestrates model retraining, governance verification, and calls `POST /v1/models/reload` on the FastAPI Serving Gateway for **zero-downtime hot-reloading** of the model bundle in memory.
-- `dags/dag_ground_truth_feedback_loop.py`: Evaluates every target's champion on its latest matured cutoff, and retrains when the realized AUC degraded.
+Day-to-day operation is described in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 ### Monitoring loop
 
@@ -353,55 +293,57 @@ same machine:
 
 ---
 
-## 6. Automated Testing & Verification
-
-The test suite validates data quality, point-in-time leakage prevention, speed-batch fusion logic, scheduler triggers, Airflow DAGs, and API endpoints:
+## 6. Testing & Verification
 
 ```bash
-# Run complete test suite
-python -m pytest tests/ -v
-
-# What CI runs (no real data / no live infrastructure needed)
-ruff check .
-python -m pytest -m "not integration"
+ruff check .                               # pinned rule set (pyproject)
+python -m pytest                           # everything (real-data tests self-skip without the CSVs)
+python -m pytest -m "not integration"      # what CI runs on every PR
+python -m scripts.e2e_smoke                # docker-compose end-to-end (nightly in CI on synthetic data)
+python -m scripts.load_test                # serving latency p50/p95/p99
 ```
 
-Test markers: `requires_data` (self-skips when the Dunnhumby CSVs are absent), `integration` (needs the
-local Feast registry / live infrastructure). Pipeline tests use the synthetic dataset in `tests/fixtures/`.
+Markers: `requires_data` (skips itself when the Dunnhumby CSVs are absent), `integration` (needs the local
+Feast registry). Pipeline tests use the synthetic Dunnhumby-shaped fixture in `tests/fixtures/`, so they
+run in seconds without real data.
 
-**Test Coverage Summary:**
-1. `tests/test_canary_routing.py`: Validates deterministic MD5 hash customer bucketing, sticky 90/10 split, and runtime dynamic A/B weight configuration endpoints.
-2. `tests/test_feature_store.py`: Validates Feast Feature Store registration, Online Store materialization, and Point-in-Time historical feature retrieval.
-3. `tests/test_features_pit.py`: Validates strictly $DAY \le t_0$, zero future leakage, and correct feature computation across 2,500 households.
-4. `tests/test_feedback_loop.py`: Validates prospective ground-truth attribution (7-14 days), Realized ROC-AUC, Brier score, Top Decile Lift, and Gold Lakehouse persistence.
-5. `tests/test_kafka_bus.py`: Validates Kafka event producer dispatch, graceful fallback to Redis, and stream consumer worker.
-6. `tests/test_lakehouse.py`: Validates Bronze Parquet conversion, Silver star schema views, Gold marts, and automated Data Quality assertions.
-7. `tests/test_lambda_fusion.py`: Validates the mathematical rules of the Serving Layer (intraday dampening, coupon intent surge, app nudge).
-8. `tests/test_monitoring.py`: Validates Model & Data Drift Monitor (numerical PSI, categorical PSI, two-sample KS-test, drift reports) and Prometheus metrics exporter.
-9. `tests/test_scheduler.py`: Validates `ScheduledTask` triggers (interval, daily, weekly, monthly), scheduler execution, and Apache Airflow DAG structures.
-10. `tests/test_serving_api.py`: Validates batch-view serving, cold start, fusion rules from settings, API-key auth (401 / fail-closed 503), rate limiting (429), event idempotency, readiness and canary variant serving.
-14. `tests/test_serving_infra.py`: Validates the Redis batch store (atomic snapshot swap, shared across replicas), bootstrap from batch artefacts, Redis-backed idempotent speed layer, STRICT_INFRA fail-fast, canary contract checks and challenger scoring in the batch pipeline.
-11. `tests/test_training_pipeline.py`: Validates leakage-safe splits, labeling, calibration selection, evaluation metrics, governance gate and the end-to-end retraining pipeline (bundle schema v2).
-12. `tests/test_feature_contract.py`: Validates point-in-time correctness of the 28 features and train/serve parity (CSV vs Lakehouse loaders, training vs batch scoring).
-13. `tests/test_predictor.py`: Validates champion bundle schema checks (feature set, horizon, ambiguous bundles) and scoring.
+| Area | Tests |
+|---|---|
+| Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_features_pit.py`, `test_lakehouse.py` |
+| Training & governance | `test_training_pipeline.py`, `test_governance.py` (gate, paired bootstrap, champion/challenger, atomic promotion, rollback), `test_targets.py` (purchase / lapse, value-ranked retention list), `test_predictor.py` (bundle validation) |
+| Serving & speed layer | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, idempotency, canary variants), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
+| Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, fusion-rule evaluation, gauges), `test_monitoring.py`, `test_scheduler.py`, `test_feature_store.py` |
+| Alerting | `docker/prometheus/alert_rules_test.yml` (`promtool test rules`, in CI) |
 
 ---
 
-## 7. Zero-Downtime Cloud Migration Strategy
+## 7. Cloud Migration Strategy
 
-The system is designed with strict storage and compute decoupling, enabling a phased, zero-downtime migration to GCP or AWS:
+Storage and compute are decoupled, so the stack can move to GCP or AWS component by component:
 
-| Component | On-Premise Stack | GCP Migration Target | AWS Migration Target | Migration Method |
+| Component | On-premise | GCP | AWS | Method |
 |---|---|---|---|---|
-| **Master Dataset** | MinIO (S3 API) | Google Cloud Storage (GCS) | Amazon S3 | `rclone` / Storage Transfer Service (Active-Active) |
-| **Lakehouse Engine** | DuckDB + Parquet | Google BigQuery | Snowflake / Redshift | `dbt-bigquery` adapter swap; zero SQL rewrite |
-| **Streaming / Speed** | Redis 7 + In-Memory | Google Cloud Memorystore | Amazon ElastiCache Redis | Redis replication or dual-write from gateway |
-| **Event Bus** | Kafka / Direct REST | Cloud Pub/Sub | Amazon Kinesis / MSK | MirrorMaker 2 (Zero loss) |
-| **Serving API** | FastAPI on Docker | Google Kubernetes Engine (GKE) | Amazon EKS | Identical Docker images; Blue/Green DNS cutover |
+| Raw / master data | Read-only CSV mount (`RAW_DATA_DIR`) | Cloud Storage | S3 | Copy once; point `DATA_RAW_DIR` at the mounted bucket |
+| Lakehouse | DuckDB + Parquet | BigQuery | Snowflake / Redshift | Re-implement `LakehouseEngine` Bronze reads; the `DataLoader` contract is unchanged |
+| Speed / serving state | Redis 7 | Memorystore | ElastiCache | Redis replication, then a DNS switch |
+| Event bus | Kafka (KRaft) | Pub/Sub or managed Kafka | MSK / Kinesis | MirrorMaker 2 for Kafka targets |
+| Serving / pipelines | Docker images | GKE | EKS | Same images; blue/green cutover gated by `/ready` |
 
-For complete rollback criteria, data validation checks, and operational runbooks, see [`docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md`](file:///c:/Users/kienn/PropensityVSF/docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md).
+Details are in [docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md](docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md).
 
 ---
 
-## 8. License
+## 8. Known Limitations
+
+- **Not causal.** Scores rank households and do not measure campaign uplift. At a 14-day horizon, top-decile
+  purchase households would mostly buy anyway.
+- **Complexity not yet justified.** Logistic regression is within about 0.007 AUC of LightGBM on both targets.
+- **Fusion rules are heuristics.** The dataset has no real intraday events to calibrate them.
+- **Rate limiting is per process.** Enforce a global limit at the gateway.
+- **Storage profile is unused.** MinIO and Postgres sit behind the optional `storage` profile and are not used by the
+  application code. MinIO community images are no longer published on Docker Hub.
+
+---
+
+## 9. License
 Proprietary & Confidential - Built for Enterprise Household Purchase Propensity Scoring.
