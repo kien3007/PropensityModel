@@ -52,7 +52,28 @@ def test_horizon_mismatch_is_rejected():
 
 
 def _legacy_package():
-    return joblib.load(settings.MODEL_PATH)
+    """A schema-v1 ("bundles" dict) package, as exported from projectphase3, built from the champion."""
+    current = joblib.load(settings.MODEL_PATH)
+    inner = next(iter(current["bundles"].values())) if "bundles" in current else current
+    return {
+        "bundles": {"28 multi-domain (projectphase3)": {
+            "model": inner["model"],
+            "calibrator": inner["calibrator"],
+            "features": list(inner["features"]),
+            "categorical_features": list(inner["categorical_features"]),
+        }},
+        "epsilon": 1e-4,
+        "prediction_window_days": 14,
+    }
+
+
+def test_legacy_v1_bundle_still_loads(tmp_path, synthetic_data):
+    path = tmp_path / "legacy.joblib"
+    joblib.dump(_legacy_package(), path)
+    legacy = PropensityPredictor(model_path=path)
+    assert legacy.bundle["schema_version"] == 1 and legacy.horizon_days == 14
+    feats = MultiDomainFeatureBuilder(synthetic_data).features_at(150)
+    np.testing.assert_allclose(legacy.predict_proba(feats), PropensityPredictor().predict_proba(feats))
 
 
 def test_unknown_feature_set_is_rejected(tmp_path):
