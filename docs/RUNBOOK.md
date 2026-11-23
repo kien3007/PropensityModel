@@ -30,6 +30,24 @@ python -m scripts.e2e_smoke                                 # kiểm tra toàn b
 
 Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc trong container qua `docker compose --profile tools run --rm batch-pipeline <lệnh>`.
 
+## 1b. Feature store (Feast)
+
+- **Vị trí:** `FEATURE_STORE_DIR`; trong docker là `/app/data/lakehouse/feature_store`, nằm trong volume `lakehouse_data`.
+  - Kho lịch sử (offline): `offline/household_features.parquet`, mỗi cutoff một snapshot.
+  - Online store: SQLite `online_store.db`.
+  - Registry: `registry.db`, được đăng ký tự động từ code.
+- **Batch** mỗi lần chạy ghi thêm snapshot của cutoff đó và cập nhật online store. Training mặc định (`TRAINING_FEATURE_SOURCE=feast`) đọc feature bằng join point-in-time. Cutoff nào chưa có snapshot thì được tính và ghi bổ sung một lần.
+- **Kiểm tra:** `python -m scripts.feature_store status`. Sau mỗi lần batch, ngày cutoff mới phải xuất hiện trong danh sách.
+- **Lỗi `MissingSnapshotError` ("no snapshot within 7 days")** nghĩa là feature được yêu cầu ở thời điểm cách snapshot gần nhất quá TTL. Cách xử lý:
+  - Chạy `backfill --cutoffs <ngày>`, hoặc chạy lại batch.
+  - Không tăng TTL để che lỗi, vì như vậy model sẽ âm thầm dùng feature cũ.
+- **Khi sửa cách tính feature** (logic trong `pit_extractor.py`):
+  - Ghi đè lịch sử bằng `python -m scripts.feature_store backfill --training --overwrite`, hoặc xoá thư mục rồi backfill lại.
+  - Sau đó chạy `scripts.reproduce_champion`.
+  - Nếu đổi danh sách feature thì phải tăng `FEATURE_SET_VERSION`; tên feature view sẽ đổi theo.
+- **Bỏ qua feature store khi cần:** `--feature-source builder` (training tính lại trực tiếp), hoặc `FEATURE_STORE_ENABLED=false` (batch không ghi snapshot).
+- **Sao lưu:** kho lịch sử là nguồn của dữ liệu train, nên hãy sao lưu cùng `models_data`. Nếu mất, có thể dựng lại bằng `backfill` từ lớp Bronze.
+
 ## 2. Lịch job
 
 | Job | Lịch | Chạy tay |

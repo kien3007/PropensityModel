@@ -124,6 +124,20 @@ def apply_categorical_dtypes(df: pd.DataFrame, categorical: Sequence[str] = CATE
     return out
 
 
+def normalize_feature_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fixes the storage type of every contract feature: numeric -> float64, categorical ->
+    'category' over strings. Without this a column such as days_since_last_basket is int64 or
+    float64 depending on whether any household lacks history, which breaks a typed feature
+    store schema. Values are unchanged (LightGBM reads numerics as float anyway).
+    """
+    out = apply_categorical_dtypes(df)
+    for col in NUMERIC_FEATURES:
+        if col in out.columns:
+            out[col] = out[col].astype("float64")
+    return out
+
+
 def validate_feature_frame(df: pd.DataFrame, features: Sequence[str] = MODEL_FEATURES) -> None:
     """Fails loudly on missing columns or non-finite numeric values."""
     missing = [f for f in features if f not in df.columns]

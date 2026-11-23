@@ -20,7 +20,7 @@ from src.features.contract import (
     CATEGORICAL_FEATURES,
     LEGACY_FEATURES_23,
     MODEL_FEATURES,
-    apply_categorical_dtypes,
+    normalize_feature_dtypes,
     validate_feature_frame,
 )
 
@@ -314,7 +314,7 @@ def compute_multidomain_features(
         avail_cols = [c for c in CATEGORICAL_FEATURES if c in demographics.columns]
         if avail_cols:
             feats = feats.merge(demographics[["household_key"] + avail_cols], on="household_key", how="left")
-    feats = apply_categorical_dtypes(feats)
+    feats = normalize_feature_dtypes(feats)
 
     drop_cols = ["last_trip_day", "last_perish_day", "primary_store_spend"]
     feats = feats.drop(columns=[c for c in drop_cols if c in feats.columns])

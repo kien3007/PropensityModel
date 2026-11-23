@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = None
     REDIS_TTL_SECONDS: int = 86400  # 24 Hours
 
+    # Feature store (Feast). Every batch run appends its snapshot to the offline history and
+    # refreshes the online store; training reads features back with point-in-time joins.
+    FEATURE_STORE_ENABLED: bool = True
+    FEATURE_STORE_DIR: Path = BASE_DIR / "data/feature_store"
+    FEATURE_TTL_DAYS: int = 7                  # snapshot cadence: older features are treated as missing
+    TRAINING_FEATURE_SOURCE: str = "feast"     # "feast" (historical store) or "builder" (recompute)
+
     # Production hardening. STRICT_INFRA=true disables every silent in-memory fallback:
     # the service fails fast if Redis (or an enabled Kafka) is unreachable.
     STRICT_INFRA: bool = False

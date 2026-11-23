@@ -1,6 +1,4 @@
-"""
-Enterprise Feast Feature Store Integration Package.
-"""
-from src.feature_store.client import FeastFeatureStoreClient
+"""Feast-backed historical feature store (see client.py)."""
+from src.feature_store.client import FeatureStoreClient, FeatureStoreSource, MissingSnapshotError
 
-__all__ = ["FeastFeatureStoreClient"]
+__all__ = ["FeatureStoreClient", "FeatureStoreSource", "MissingSnapshotError"]

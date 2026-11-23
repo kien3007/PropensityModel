@@ -42,6 +42,8 @@ def run_training_pipeline(
     registry_dir: Optional[Path | str] = None,
     promote: bool = True,
     force_promote: bool = False,
+    feature_source: Optional[str] = None,
+    feature_store_dir: Optional[Path | str] = None,
 ) -> Dict[str, Any]:
     """
     Trains and evaluates a champion candidate.
@@ -63,7 +65,18 @@ def run_training_pipeline(
 
     # 1. Data & temporal splits
     raw = data or DataLoader.load()
-    features = MultiDomainFeatureBuilder(raw, lookback_days=cfg.lookback_days)
+    builder = MultiDomainFeatureBuilder(raw, lookback_days=cfg.lookback_days)
+    source_name = (feature_source or settings.TRAINING_FEATURE_SOURCE).lower()
+    if source_name == "feast":
+        # Point-in-time reads from the historical feature store; cutoffs never snapshotted
+        # are computed once and written back (backfill), labels still come from baskets.
+        from src.feature_store.client import FeatureStoreClient, FeatureStoreSource
+
+        features = FeatureStoreSource(builder, FeatureStoreClient(root=feature_store_dir))
+    elif source_name == "builder":
+        features = builder
+    else:
+        raise ValueError(f"Unknown feature_source '{source_name}' (expected 'feast' or 'builder')")
     splits = DatasetBuilder(features).build_splits(cfg)
     fit, val, test = splits["fit"], splits["val"], splits["test"]
 
@@ -139,6 +152,7 @@ def run_training_pipeline(
         "bundle_name": bundle["bundle_name"],
         "config": cfg.to_dict(),
         "data_source": raw.source,
+        "feature_source": source_name,
         "data_fingerprint": bundle["data_fingerprint"],
         "git_sha": bundle["git_sha"],
         "rows": {name: len(s.frame) for name, s in splits.items()},
@@ -169,11 +183,14 @@ if __name__ == "__main__":
     parser.add_argument("--no-promote", action="store_true", help="Train and evaluate only; never touch the registry")
     parser.add_argument("--force-promote", action="store_true", help="Promote even if the governance gate fails")
     parser.add_argument("--data-source", choices=["lakehouse", "csv"], default=None)
+    parser.add_argument("--feature-source", choices=["feast", "builder"], default=None,
+                        help="Where training features come from (default: settings.TRAINING_FEATURE_SOURCE)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     run_training_pipeline(
         config=TRAINING_CONFIGS[args.target],
         data=DataLoader.load(args.data_source),
+        feature_source=args.feature_source,
         promote=not args.no_promote,
         force_promote=args.force_promote,
     )

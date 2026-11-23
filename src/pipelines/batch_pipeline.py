@@ -42,6 +42,7 @@ def run_batch_pipeline(
     challenger_model_path: Optional[Path | str] = None,
     batch_store: Optional[BatchScoreStore] = None,
     monitoring_state: Optional[MonitoringState] = None,
+    feature_store_dir: Optional[Path | str] = None,
 ) -> Dict[str, Any]:
     """
     Executes the End-to-End Batch Layer Pipeline.
@@ -70,6 +71,20 @@ def run_batch_pipeline(
     logger.info(f"Extracting Point-in-Time features up to DAY={cutoff_day} from {data.source}...")
     builder = MultiDomainFeatureBuilder(data)
     snapshot = builder.features_at(cutoff_day)
+
+    # 2b. Persist the snapshot in the historical feature store (offline history + online refresh)
+    feature_store_summary = None
+    if settings.FEATURE_STORE_ENABLED:
+        try:
+            from src.feature_store.client import FeatureStoreClient
+
+            fs = FeatureStoreClient(root=feature_store_dir)
+            rows = fs.write_snapshot(snapshot, cutoff_day, online=True)
+            feature_store_summary = {"rows": rows, "snapshot_days": len(fs.snapshot_days()), "root": str(fs.root)}
+        except Exception as e:
+            if settings.STRICT_INFRA:
+                raise
+            logger.error(f"Feature store write failed for DAY {cutoff_day}: {e}")
 
     # 3. Model Inference & Business Tiering
     logger.info(f"Scoring {len(snapshot):,} households with Champion model '{predictor.bundle_name}'...")
@@ -165,6 +180,7 @@ def run_batch_pipeline(
         "challenger": challenger_summary,
         "challenger_bundle": challenger_summary["model_bundle"] if challenger_summary else None,
         "serving_store_backend": store.backend,
+        "feature_store": feature_store_summary,
         "duration_seconds": round(duration, 2),
         "artifacts": {
             "parquet": str(parquet_path),

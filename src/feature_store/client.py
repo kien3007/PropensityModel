@@ -1,109 +1,206 @@
 """
-Feast Feature Store Client Integration Module.
-Provides high-level programmatic access for:
-- Point-in-Time Historical Feature Joins (Offline Store)
-- Sub-millisecond Online Feature Retrieval (Online Store)
-- Snapshot Materialization from Lakehouse to Online Store
+Feast-backed historical feature store.
+
+Layout under settings.FEATURE_STORE_DIR:
+  offline/household_features.parquet   every snapshot ever written (one per cutoff day)
+  registry.db                          Feast registry (applied from code; no `feast apply` needed)
+  online_store.db                      SQLite online store holding the latest snapshot
+
+Writes:  `write_snapshot` appends (or replaces) the rows of one cutoff atomically; it never
+         drops other snapshots, so the offline store accumulates real history.
+Reads:   `get_historical_features` is a Feast point-in-time join (entity rows at a cutoff get
+         the latest snapshot with timestamp <= cutoff, within the TTL); `get_online_features`
+         reads the latest values per household.
+`FeatureStoreSource` gives training the same interface as MultiDomainFeatureBuilder, reading
+features from the store and backfilling cutoffs that were never snapshotted.
 """
 from __future__ import annotations
 
 import datetime
 import logging
+import os
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Iterable, List, Optional, Sequence
+
 import pandas as pd
-
 from feast import FeatureStore
+from feast.repo_config import RepoConfig
+
 from src.config.settings import settings
-from src.data.loader import DataLoader
-from src.features.contract import MODEL_FEATURES as MULTIDOMAIN_FEATURES_28
-from src.features.pit_extractor import MultiDomainFeatureBuilder
+from src.feature_store.definitions import (
+    FEATURE_VIEW_NAME,
+    PROJECT_NAME,
+    build_feature_view,
+    day_to_timestamp,
+    household,
+)
+from src.features.contract import (
+    CATEGORICAL_FEATURES,
+    MODEL_FEATURES,
+    FeatureContractError,
+    normalize_feature_dtypes,
+    validate_feature_frame,
+)
 
-logger = logging.getLogger("FeatureStoreClient")
+logger = logging.getLogger("FeatureStore")
 
-FEATURE_REPO_PATH = Path(__file__).resolve().parent.parent.parent / "feature_repo"
+OFFLINE_COLUMNS = ["household_key", "cutoff_day", "event_timestamp", "created_timestamp", *MODEL_FEATURES]
 
 
-class FeastFeatureStoreClient:
-    """
-    Enterprise Feast client managing Offline/Online stores and Lakehouse sync.
-    """
+class MissingSnapshotError(LookupError):
+    """Raised when features are requested for a cutoff that was never snapshotted."""
 
-    def __init__(self, repo_path: Optional[Path | str] = None) -> None:
-        self.repo_path = Path(repo_path or FEATURE_REPO_PATH)
-        self.store = FeatureStore(repo_path=str(self.repo_path))
 
-    def get_feature_view_names(self) -> List[str]:
-        return [fv.name for fv in self.store.list_feature_views()]
-
-    def get_historical_features(
-        self,
-        entity_df: pd.DataFrame,
-        feature_refs: Optional[List[str]] = None,
-    ) -> pd.DataFrame:
-        """
-        Retrieves historical features for entity DataFrame using Point-in-Time join.
-        entity_df must contain ['household_key', 'event_timestamp'].
-        """
-        if feature_refs is None:
-            feature_refs = [f"household_features_view:{f}" for f in MULTIDOMAIN_FEATURES_28]
-
-        training_data = self.store.get_historical_features(
-            entity_df=entity_df,
-            features=feature_refs,
+class FeatureStoreClient:
+    def __init__(self, root: Optional[Path | str] = None, ttl_days: Optional[int] = None) -> None:
+        self.root = Path(root or settings.FEATURE_STORE_DIR).resolve()
+        self.offline_path = self.root / "offline" / "household_features.parquet"
+        self.offline_path.parent.mkdir(parents=True, exist_ok=True)
+        self.ttl_days = ttl_days or settings.FEATURE_TTL_DAYS
+        config = RepoConfig(
+            project=PROJECT_NAME,
+            provider="local",
+            registry=str(self.root / "registry.db"),
+            offline_store={"type": "file"},
+            online_store={"type": "sqlite", "path": str(self.root / "online_store.db")},
+            entity_key_serialization_version=3,
+            repo_path=self.root,
         )
-        return training_data.to_df()
+        self.store = FeatureStore(config=config)
+        self.feature_view = build_feature_view(self.offline_path.as_posix(), self.ttl_days)
+        self._applied = False
 
-    def get_online_features(
-        self,
-        household_keys: List[int],
-        feature_refs: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Retrieves online features for specified households.
-        """
-        if feature_refs is None:
-            feature_refs = [f"household_features_view:{f}" for f in MULTIDOMAIN_FEATURES_28]
+    # -------------------------------------------------------------- registry
+    def apply(self) -> None:
+        """Registers entity + feature view (idempotent). Needs the offline file to exist."""
+        if not self._applied:
+            self.store.apply([household, self.feature_view])
+            self._applied = True
 
-        entity_rows = [{"household_key": k} for k in household_keys]
-        response = self.store.get_online_features(
-            features=feature_refs,
-            entity_rows=entity_rows,
-        )
-        return response.to_dict()
+    # ----------------------------------------------------------------- write
+    def _read_offline(self) -> pd.DataFrame:
+        if not self.offline_path.exists():
+            return pd.DataFrame(columns=OFFLINE_COLUMNS)
+        return pd.read_parquet(self.offline_path)
 
-    def materialize_snapshot(
-        self,
-        cutoff_day: int = 711,
-        raw_data_dir: Optional[Path | str] = None,
-        gold_dir: Optional[Path | str] = None,
-    ) -> Path:
-        """
-        Generates snapshot with event_timestamp, saves to Gold Lakehouse,
-        and materializes into Feast Online Store.
-        """
-        gold_path = Path(gold_dir or (settings.BASE_DIR / "data" / "lakehouse" / "gold"))
-        gold_path.mkdir(parents=True, exist_ok=True)
-        parquet_file = gold_path / "fct_household_features_snapshot.parquet"
+    def snapshot_days(self) -> List[int]:
+        if not self.offline_path.exists():
+            return []
+        days = pd.read_parquet(self.offline_path, columns=["cutoff_day"])["cutoff_day"]
+        return sorted(int(d) for d in days.unique())
 
-        logger.info(f"Extracting 28 multi-domain features for cutoff day {cutoff_day}...")
-        data = DataLoader.from_csv(raw_data_dir) if raw_data_dir is not None else DataLoader.load()
-        snapshot_df = MultiDomainFeatureBuilder(data).features_at(cutoff_day)
+    def write_snapshot(self, features: pd.DataFrame, cutoff_day: int, online: bool = True) -> int:
+        """Appends one cutoff's snapshot to the offline history (replacing that cutoff if present)."""
+        validate_feature_frame(features)
+        snap = normalize_feature_dtypes(features)[["household_key", *MODEL_FEATURES]].copy()
+        for col in CATEGORICAL_FEATURES:  # Feast String columns are stored as plain strings
+            snap[col] = snap[col].astype(str)
+        snap.insert(1, "cutoff_day", int(cutoff_day))
+        snap.insert(2, "event_timestamp", day_to_timestamp(cutoff_day))
+        snap.insert(3, "created_timestamp", datetime.datetime.now(datetime.timezone.utc))
 
-        # Feast requires event_timestamp column
-        base_date = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
-        as_of_date = base_date + datetime.timedelta(days=cutoff_day)
-        snapshot_df["event_timestamp"] = as_of_date
-        snapshot_df["created_timestamp"] = datetime.datetime.now(datetime.timezone.utc)
+        existing = self._read_offline()
+        kept = existing[existing["cutoff_day"] != int(cutoff_day)] if len(existing) else existing
+        combined = pd.concat([kept, snap], ignore_index=True) if len(kept) else snap
+        combined = combined.sort_values(["cutoff_day", "household_key"]).reset_index(drop=True)
+        fd, tmp = tempfile.mkstemp(dir=self.offline_path.parent, suffix=".parquet.tmp")
+        os.close(fd)
+        try:
+            combined.to_parquet(tmp, index=False)
+            os.replace(tmp, self.offline_path)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
 
-        snapshot_df.to_parquet(parquet_file, index=False)
-        logger.info(f"Saved Feast Gold snapshot ({len(snapshot_df)} rows) to {parquet_file}")
+        self.apply()
+        latest = max(self.snapshot_days())
+        if online and int(cutoff_day) >= latest:
+            self.store.write_to_online_store(FEATURE_VIEW_NAME, snap.drop(columns=["cutoff_day"]))
+        logger.info(f"Feature snapshot DAY={cutoff_day}: {len(snap):,} households "
+                    f"(offline history: {combined['cutoff_day'].nunique()} snapshots"
+                    f"{', online refreshed' if online and int(cutoff_day) >= latest else ''}).")
+        return len(snap)
 
-        # Materialize into Feast online store
-        start_date = as_of_date - datetime.timedelta(days=1)
-        end_date = as_of_date + datetime.timedelta(days=1)
-        logger.info(f"Materializing features from {start_date} to {end_date}...")
-        self.store.materialize(start_date=start_date, end_date=end_date)
-        logger.info("Feast materialization to Online Store completed successfully.")
+    def backfill(self, builder, cutoffs: Iterable[int], overwrite: bool = False) -> List[int]:
+        """Computes and stores snapshots for cutoffs that are missing (or all, with overwrite)."""
+        existing = set(self.snapshot_days())
+        written = []
+        for cutoff in sorted(set(int(c) for c in cutoffs)):
+            if overwrite or cutoff not in existing:
+                self.write_snapshot(builder.features_at(cutoff), cutoff, online=False)
+                written.append(cutoff)
+        return written
 
-        return parquet_file
+    # ------------------------------------------------------------------ read
+    def get_historical_features(self, households: Sequence[int], cutoff_day: int) -> pd.DataFrame:
+        """Point-in-time join through Feast for every household at one cutoff."""
+        if not self.offline_path.exists():
+            raise MissingSnapshotError("Feature store is empty; run a batch or backfill first")
+        self.apply()
+        entity_df = pd.DataFrame({"household_key": list(households)})
+        entity_df["event_timestamp"] = day_to_timestamp(cutoff_day)
+        refs = [f"{FEATURE_VIEW_NAME}:{f}" for f in MODEL_FEATURES]
+        df = self.store.get_historical_features(entity_df=entity_df, features=refs).to_df()
+        df = df.drop(columns=["event_timestamp"]).assign(cutoff_day=int(cutoff_day))
+        df["household_key"] = df["household_key"].astype("int64")
+        order = pd.DataFrame({"household_key": [int(h) for h in households]})
+        # Feast drops entity rows with no snapshot inside the TTL; the left join exposes them.
+        df = order.merge(df, on="household_key", how="left", validate="one_to_one")
+        missing = df[MODEL_FEATURES].isna().any(axis=1)
+        if missing.any():
+            raise MissingSnapshotError(
+                f"{int(missing.sum())} of {len(df)} households have no snapshot within {self.ttl_days} days "
+                f"before DAY {cutoff_day}; backfill that cutoff"
+            )
+        df = normalize_feature_dtypes(df[["household_key", "cutoff_day", *MODEL_FEATURES]])
+        validate_feature_frame(df)
+        return df
+
+    def get_online_features(self, household_keys: Sequence[int]) -> pd.DataFrame:
+        self.apply()
+        refs = [f"{FEATURE_VIEW_NAME}:{f}" for f in MODEL_FEATURES]
+        rows = [{"household_key": int(k)} for k in household_keys]
+        return self.store.get_online_features(features=refs, entity_rows=rows).to_df()
+
+
+class FeatureStoreSource:
+    """
+    Drop-in replacement for MultiDomainFeatureBuilder in DatasetBuilder: features come from the
+    feature store's point-in-time join; labels, baskets and the household universe still come
+    from the builder (labels need data after the cutoff, which a feature store must not hold).
+    """
+
+    def __init__(self, builder, client: Optional[FeatureStoreClient] = None, backfill_missing: bool = True) -> None:
+        self.builder = builder
+        self.client = client or FeatureStoreClient()
+        self.backfill_missing = backfill_missing
+        self.source = "feast"
+
+    @property
+    def data(self):
+        return self.builder.data
+
+    @property
+    def baskets(self) -> pd.DataFrame:
+        return self.builder.baskets
+
+    @property
+    def households(self) -> List[int]:
+        return self.builder.households
+
+    def last_observed_day(self) -> int:
+        return self.builder.last_observed_day()
+
+    def labels_at(self, cutoff: int, horizon_days: int) -> pd.DataFrame:
+        return self.builder.labels_at(cutoff, horizon_days)
+
+    def features_at(self, cutoff: int) -> pd.DataFrame:
+        if cutoff not in self.client.snapshot_days():
+            if not self.backfill_missing:
+                raise MissingSnapshotError(f"No feature snapshot for DAY {cutoff}")
+            logger.info(f"Backfilling missing feature snapshot DAY={cutoff}")
+            self.client.write_snapshot(self.builder.features_at(cutoff), cutoff, online=False)
+        try:
+            return self.client.get_historical_features(self.households, cutoff)
+        except MissingSnapshotError as exc:
+            raise FeatureContractError(str(exc)) from exc
