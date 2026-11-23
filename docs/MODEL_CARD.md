@@ -62,13 +62,7 @@ Mọi feature được tính **point-in-time**: chỉ dùng dữ liệu có `DAY
 | Lift@10% | 1,42× (tối đa có thể đạt: 1,43×) | 3,02× (tối đa có thể đạt: 9,4×) |
 | Base rate | 0,701 | 0,106 |
 
-So với baseline trên cùng tập test (chi tiết trong [analysis/TARGET_ANALYSIS.md](analysis/TARGET_ANALYSIS.md)):
-
-| ROC-AUC | purchase | lapse |
-|---|---|---|
-| LightGBM (champion) | 0,859 | 0,816 |
-| Logistic regression, chỉ feature số | 0,856 | 0,809 |
-| Heuristic | 0,789 (theo recency) | 0,579 (quá hạn so với chu kỳ mua của chính hộ) |
+Danh sách target theo từng mức năng lực chiến dịch: xem [analysis/TARGET_ANALYSIS.md](analysis/TARGET_ANALYSIS.md).
 
 **Feature quan trọng nhất** (theo tỷ trọng gain):
 - Purchase: `baskets_count_60d` 45%, `baskets_count_90d` 19%, `days_since_last_basket` 7%.
@@ -102,7 +96,6 @@ Ngưỡng của lapse được chốt *trước* khi train model lapse đầu ti
   - Ở horizon 14 ngày, 70% hộ đằng nào cũng mua. Top decile gần như toàn là khách mua đều đặn (precision khoảng 1,0).
   - Vì vậy **không được** coi chi tiêu của top decile là doanh thu tăng thêm nhờ chiến dịch.
 - **Lapse:** danh sách retention nên xếp theo **p(lapse) × chi tiêu 90 ngày** (`expected_spend_at_risk`), đúng như batch đang xuất.
-  - Trên tập test, cách xếp này giữ được số tiền có nguy cơ mất gấp khoảng 2 lần so với xếp theo p(lapse).
   - Danh sách `RETENTION_OFFER` là 10% hộ có giá trị kỳ vọng cao nhất.
 - **Xác suất đã được calibrate,** nên có thể dùng trực tiếp làm giá trị kỳ vọng.
   - Isotonic tạo ra các bậc giá trị, nên nhiều hộ có cùng xác suất.
@@ -111,7 +104,6 @@ Ngưỡng của lapse được chốt *trước* khi train model lapse đầu ti
 ## 7. Giới hạn và rủi ro
 
 - **Không phải model nhân quả.** Lift và các con số giá trị chỉ đo *mối liên hệ*. Muốn chứng minh hiệu quả chiến dịch cần holdout hoặc thiết kế uplift.
-- **Độ phức tạp chưa được biện minh:** logistic regression gần ngang LightGBM ở cả hai target. Logistic regression phải luôn có mặt trong báo cáo, làm baseline bắt buộc.
 - **Thời gian:**
   - `DAY` không ánh xạ được về ngày lịch thật, nên không mô hình hoá được mùa vụ.
   - Ngày 278 và 643 có dữ liệu bất thường (đã ghi nhận ở phần EDA lưu trữ).

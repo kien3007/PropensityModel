@@ -73,7 +73,6 @@ def main() -> int:
         "candidate": {"bundle_name": summary["bundle_name"], "candidate_path": summary["candidate_path"],
                       "calibration_method": summary["calibration_method"],
                       "best_iteration": summary["best_iteration"], "metrics": candidate},
-        "baselines": summary["baselines"],
         "data_source": data.source,
         "data_fingerprint": data.fingerprint(),
         "git_sha": summary["git_sha"],

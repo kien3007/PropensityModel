@@ -20,17 +20,17 @@ CHAMPION_TEST_METRICS = {
     "roc_auc": 0.8593, "brier_skill_score": 0.3467, "normalized_lift_10": 0.9800,
     "pr_auc_gain": 0.7680, "ece": 0.0193,
 }
-RECENCY_RULE_TEST_METRICS = {
+WEAK_MODEL_TEST_METRICS = {
     "roc_auc": 0.7886, "brier_skill_score": -0.8711, "normalized_lift_10": 0.6972,
     "pr_auc_gain": 0.5574, "ece": 0.4443,
 }
 
 
 # --------------------------------------------------------------------- quality gate
-def test_quality_gate_accepts_champion_and_rejects_recency_rule(tmp_path):
+def test_quality_gate_accepts_champion_and_rejects_weak_model(tmp_path):
     registry = ModelRegistry(tmp_path)
     assert registry.evaluate_governance_gate(CHAMPION_TEST_METRICS)["passed"]
-    result = registry.evaluate_governance_gate(RECENCY_RULE_TEST_METRICS)
+    result = registry.evaluate_governance_gate(WEAK_MODEL_TEST_METRICS)
     assert not result["passed"]
     failed = {k for k, c in result["checks"].items() if not c["pass"]}
     assert {"brier_skill_score", "normalized_lift_10", "pr_auc_gain", "ece"} <= failed
