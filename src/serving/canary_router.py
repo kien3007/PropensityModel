@@ -10,7 +10,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from src.config.settings import settings
 from src.models.predictor import PropensityPredictor
 
 logger = logging.getLogger("CanaryRouter")

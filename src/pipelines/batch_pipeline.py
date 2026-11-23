@@ -14,7 +14,9 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from src.config.settings import settings
-from src.features.pit_extractor import PointInTimeFeatureExtractor
+from src.data.loader import DataLoader, RawDataBundle
+from src.features.contract import FEATURE_SET_VERSION
+from src.features.pit_extractor import MultiDomainFeatureBuilder
 from src.lakehouse.engine import LakehouseEngine
 from src.models.predictor import PropensityPredictor
 from src.monitoring.drift_detector import DataDriftDetector
@@ -26,7 +28,8 @@ logger = logging.getLogger("BatchPipeline")
 
 def run_batch_pipeline(
     cutoff_day: int = 711,
-    transactions_csv: Optional[Path | str] = None,
+    raw_data_dir: Optional[Path | str] = None,
+    data: Optional[RawDataBundle] = None,
     output_dir: Optional[Path | str] = None,
     lakehouse_path: Optional[Path | str] = None,
     model_path: Optional[Path | str] = None,
@@ -41,34 +44,22 @@ def run_batch_pipeline(
     out_dir = Path(output_dir or settings.OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tx_csv = Path(transactions_csv or (settings.DATA_RAW_DIR / "transaction_data.csv"))
-    if not tx_csv.exists():
-        raise FileNotFoundError(f"Source transactions file not found at {tx_csv}")
-
     # 1. Initialize Lakehouse & Bronze Ingestion
-    lakehouse = LakehouseEngine(lakehouse_path=lakehouse_path)
+    lakehouse = LakehouseEngine(lakehouse_path=lakehouse_path, raw_data_dir=raw_data_dir)
     logger.info("Verifying Lakehouse Bronze/Silver/Gold layers...")
     lakehouse.ingest_bronze()
     lakehouse.build_silver_layer()
     lakehouse.build_gold_layer()
 
-    # 2. Extract Point-in-Time Features
-    logger.info(f"Extracting Point-in-Time features up to DAY={cutoff_day}...")
+    # 2. Extract Point-in-Time Features through the same loader + builder used in training
     predictor = PropensityPredictor(model_path=model_path)
-
-    if len(predictor.features) == 28:
-        snapshot = PointInTimeFeatureExtractor.extract_multidomain_features(
-            cutoff=cutoff_day,
-            raw_data_dir=tx_csv.parent,
+    if predictor.feature_set_version != FEATURE_SET_VERSION:
+        raise ValueError(
+            f"Champion uses feature set {predictor.feature_set_version}; batch scoring implements {FEATURE_SET_VERSION}"
         )
-    else:
-        cols = ["household_key", "BASKET_ID", "DAY", "SALES_VALUE"]
-        tx = pd.read_csv(tx_csv, usecols=cols)
-        snapshot = PointInTimeFeatureExtractor.extract_features(
-            transactions=tx,
-            cutoff=cutoff_day,
-            feature_cols=predictor.features,
-        )
+    data = data or DataLoader.from_lakehouse(lakehouse, ingest=False)
+    logger.info(f"Extracting Point-in-Time features up to DAY={cutoff_day} from {data.source}...")
+    snapshot = MultiDomainFeatureBuilder(data).features_at(cutoff_day)
 
     # 3. Model Inference & Business Tiering
     logger.info(f"Scoring 2,500 households with Champion model '{predictor.bundle_name}'...")
@@ -123,6 +114,8 @@ def run_batch_pipeline(
         "run_id": run_id,
         "cutoff_day": cutoff_day,
         "model_bundle": predictor.bundle_name,
+        "horizon_days": predictor.horizon_days,
+        "data_source": data.source,
         "feature_count": len(predictor.features),
         "total_households_scored": len(scores_df),
         "mean_propensity": float(scores_df["purchase_probability"].mean()),

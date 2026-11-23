@@ -25,9 +25,10 @@ venv/
 ENV/
 
 # Data and Models
-data/
-sample_data/
-feature_repo/data/
+# Anchored to the repo root so packages such as src/data/ are not ignored.
+/data/
+/sample_data/
+/feature_repo/data/
 *.db
 *.duckdb
 *.duckdb.wal

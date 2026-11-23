@@ -4,11 +4,10 @@ Unit tests for A/B Testing, Canary Router, and Dynamic Traffic Split.
 from __future__ import annotations
 
 from unittest.mock import MagicMock
-import pytest
 from fastapi.testclient import TestClient
 
 from src.models.predictor import PropensityPredictor
-from src.serving.api import app, fusion_engine
+from src.serving.api import app
 from src.serving.canary_router import CanaryRouter
 
 

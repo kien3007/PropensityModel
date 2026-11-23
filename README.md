@@ -116,7 +116,7 @@ PropensityVSF/
 │   │   └── metrics.py              # Prometheus instrumentation (P50/P95/P99 latency, RPS, Deciles, PSI, Routing)
 │   ├── pipelines/
 │   │   ├── batch_pipeline.py       # Weekly batch scoring pipeline runner
-│   │   └── train_pipeline.py       # Automated Retraining & Model Promotion pipeline runner
+│   │   └── train_pipeline.py       # Retraining & promotion pipeline (config: src/config/model_config.py)
 │   ├── scheduler/
 │   │   └── daemon.py               # Automated Scheduler Daemon (zero-dependency cron orchestrator)
 │   ├── serving/
@@ -129,7 +129,7 @@ PropensityVSF/
 │   └── training/
 │       ├── dataset_builder.py      # Multi-cutoff temporal training data & target generator
 │       ├── trainer.py              # LightGBM classifier & baseline Logistic Regression trainer
-│       ├── calibrator.py           # Platt scaling (logistic on logit) probability calibrator
+│       ├── calibrator.py           # None / Platt / Isotonic calibrators, chosen by cross-fitted ECE
 │       ├── evaluator.py            # Metrics (ROC-AUC, Brier score, Log loss, Lift@10%)
 │       └── model_registry.py       # Champion/Challenger quality gates & model bundle packager
 └── tests/
@@ -178,10 +178,15 @@ Service URLs:
 
 ```bash
 # 1. Install dependencies
-pip install -e .
+pip install -e ".[dev]"
 
-# 2. Train Champion LightGBM model across temporal cutoffs (with Platt calibration & governance gates)
-python -m src.pipelines.train_pipeline --train-cutoffs 300,400 --val-cutoff 537
+# 2. Retrain the champion definition from src/config/model_config.py
+#    (28 features, 14-day horizon, fit/val/test cutoffs, calibration chosen on validation).
+#    --no-promote: evaluate only; --force-promote: promote even if the gate fails.
+python -m src.pipelines.train_pipeline --no-promote
+
+# 2b. Check the active champion is reproducible from this repo (|dAUC| <= 0.01 on the OOT test cutoffs)
+python -m scripts.reproduce_champion
 
 # 3. Run the weekly batch scoring pipeline
 python -m src.pipelines.batch_pipeline --cutoff 711
@@ -328,7 +333,14 @@ The test suite validates data quality, point-in-time leakage prevention, speed-b
 ```bash
 # Run complete test suite
 python -m pytest tests/ -v
+
+# What CI runs (no real data / no live infrastructure needed)
+ruff check .
+python -m pytest -m "not integration"
 ```
+
+Test markers: `requires_data` (self-skips when the Dunnhumby CSVs are absent), `integration` (needs the
+local Feast registry / live infrastructure). Pipeline tests use the synthetic dataset in `tests/fixtures/`.
 
 **Test Coverage Summary:**
 1. `tests/test_canary_routing.py`: Validates deterministic MD5 hash customer bucketing, sticky 90/10 split, and runtime dynamic A/B weight configuration endpoints.
@@ -341,7 +353,9 @@ python -m pytest tests/ -v
 8. `tests/test_monitoring.py`: Validates Model & Data Drift Monitor (numerical PSI, categorical PSI, two-sample KS-test, drift reports) and Prometheus metrics exporter.
 9. `tests/test_scheduler.py`: Validates `ScheduledTask` triggers (interval, daily, weekly, monthly), scheduler execution, and Apache Airflow DAG structures.
 10. `tests/test_serving_api.py`: Validates all FastAPI endpoints (`/health`, `/metrics`, `/v1/predict/propensity`, `/v1/speed/event`, `/v1/canary/config`, `/v1/batch/scores`, `/v1/metrics`, `/v1/models/champion`, `/v1/models/reload`).
-11. `tests/test_training_pipeline.py`: Validates dataset building, target prospective labeling, LightGBM training, Platt calibration, evaluation metrics, and Model Registry governance quality gates.
+11. `tests/test_training_pipeline.py`: Validates leakage-safe splits, labeling, calibration selection, evaluation metrics, governance gate and the end-to-end retraining pipeline (bundle schema v2).
+12. `tests/test_feature_contract.py`: Validates point-in-time correctness of the 28 features and train/serve parity (CSV vs Lakehouse loaders, training vs batch scoring).
+13. `tests/test_predictor.py`: Validates champion bundle schema checks (feature set, horizon, ambiguous bundles) and scoring.
 
 ---
 

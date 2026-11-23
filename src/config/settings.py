@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     MODEL_PATH: Path = BASE_DIR / "models/champion_model.joblib"
     OUTPUT_DIR: Path = BASE_DIR / "data/outputs"
 
+    # Where training and batch scoring read raw data from. "lakehouse" = Bronze Parquet
+    # (ingested from DATA_RAW_DIR on demand), "csv" = DATA_RAW_DIR directly.
+    DATA_SOURCE: str = "lakehouse"
+
     # Master Dataset (MinIO / S3)
     S3_ENDPOINT: str = "http://localhost:9000"
     S3_ACCESS_KEY: str = "minioadmin"

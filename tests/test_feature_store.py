@@ -4,12 +4,13 @@ Unit tests for Feast Feature Store integration.
 from __future__ import annotations
 
 import datetime
-from pathlib import Path
 import pandas as pd
 import pytest
 
 from src.feature_store.client import FeastFeatureStoreClient
-from src.features.pit_extractor import MODEL_FEATURES
+
+# Needs the local Feast registry (feature_repo/data, gitignored) and real data.
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +46,6 @@ def test_feast_materialize_and_online_retrieval(feast_client, tmp_path):
 
 def test_feast_historical_point_in_time_join(feast_client):
     from src.config.settings import settings
-    raw_dir = settings.DATA_RAW_DIR
     gold_parquet = settings.BASE_DIR / "data" / "lakehouse" / "gold" / "fct_household_features_snapshot.parquet"
     if not gold_parquet.exists():
         pytest.skip("Gold snapshot parquet not found, skipping historical PIT join.")

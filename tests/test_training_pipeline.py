@@ -1,113 +1,142 @@
 """
-Unit and Integration tests for Model Training, Calibration, Evaluation, and Registry Gates.
-Tests DatasetBuilder, ModelTrainer, PlattCalibrator, ModelEvaluator, and ModelRegistry.
+Training stack tests on the synthetic dataset: dataset builder, calibrators, evaluator,
+registry and the end-to-end retraining pipeline.
 """
-from pathlib import Path
+import json
+
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
 
-from src.features.pit_extractor import MODEL_FEATURES
+from src.config.model_config import TrainingConfig
+from src.features.contract import CATEGORICAL_FEATURES, MODEL_FEATURES
+from src.features.pit_extractor import MultiDomainFeatureBuilder
+from src.models.predictor import PropensityPredictor
+from src.pipelines.train_pipeline import run_training_pipeline
+from src.training.calibrator import IsotonicCalibrator, PlattCalibrator, select_calibrator
 from src.training.dataset_builder import DatasetBuilder
-from src.training.trainer import ModelTrainer
-from src.training.calibrator import PlattCalibrator
-from src.training.evaluator import ModelEvaluator
+from src.training.evaluator import ModelEvaluator, expected_calibration_error
 from src.training.model_registry import ModelRegistry
 
 
-@pytest.fixture
-def synthetic_transactions():
-    """Generates synthetic transactions for quick deterministic testing."""
-    return pd.DataFrame({
-        "household_key": [1, 1, 2, 2, 3],
-        "BASKET_ID": [101, 102, 201, 202, 301],
-        "DAY": [10, 50, 20, 105, 102],
-        "SALES_VALUE": [15.0, 25.0, 30.0, 50.0, 10.0],
-    })
+def test_labels_use_strict_future_window(synthetic_data):
+    builder = MultiDomainFeatureBuilder(synthetic_data, lookback_days=60)
+    cutoff, horizon = 100, 7
+    labels = builder.labels_at(cutoff, horizon)
+    b = builder.baskets
+    expected = set(b[(b["DAY"] > cutoff) & (b["DAY"] <= cutoff + horizon)]["household_key"])
+    assert set(labels.loc[labels["target"] == 1, "household_key"]) == expected
+    assert len(labels) == len(synthetic_data.households)
 
 
-def test_dataset_builder_target_labeling(synthetic_transactions):
-    cutoff = 100
-    horizon = 7
-
-    # Household 2 has purchase on day 105 (in 100-107] -> target = 1
-    # Household 3 has purchase on day 102 (in 100-107] -> target = 1
-    # Household 1 has no purchase in 100-107 -> target = 0
-    snapshot = DatasetBuilder.build_snapshot_with_target(
-        transactions=synthetic_transactions,
-        cutoff_day=cutoff,
-        horizon_days=horizon,
-        feature_cols=MODEL_FEATURES,
-    )
-
-    assert len(snapshot) == 2500
-    assert "target" in snapshot.columns
-    assert snapshot.loc[snapshot["household_key"] == 2, "target"].iloc[0] == 1
-    assert snapshot.loc[snapshot["household_key"] == 3, "target"].iloc[0] == 1
-    assert snapshot.loc[snapshot["household_key"] == 1, "target"].iloc[0] == 0
+def test_returned_basket_is_not_a_purchase(synthetic_tables, synthetic_data):
+    builder = MultiDomainFeatureBuilder(synthetic_data)
+    assert 1 not in set(builder.baskets["BASKET_ID"])  # the all-returns basket (spend <= 0)
 
 
-def test_model_trainer_and_calibrator():
-    np.random.seed(42)
-    n = 200
-    X = pd.DataFrame(np.random.randn(n, len(MODEL_FEATURES)), columns=MODEL_FEATURES)
-    y = np.random.choice([0, 1], size=n, p=[0.6, 0.4])
-
-    trainer = ModelTrainer(
-        features=MODEL_FEATURES,
-        lgbm_params={"n_estimators": 10, "num_leaves": 7, "min_child_samples": 5, "random_state": 42, "verbosity": -1},
-    )
-    model = trainer.train_lightgbm(X, y)
-    raw_probs = model.predict_proba(X[MODEL_FEATURES])[:, 1]
-    assert len(raw_probs) == n
-    assert ((raw_probs >= 0.0) & (raw_probs <= 1.0)).all()
-
-    # Feature importances
-    fi_df = trainer.get_feature_importances(model)
-    assert len(fi_df) == len(MODEL_FEATURES)
-    assert "feature" in fi_df.columns and "importance" in fi_df.columns
-
-    # Platt Calibration
-    calibrator = PlattCalibrator()
-    calibrator.fit(raw_probs, y)
-    calibrated_probs = calibrator.predict_proba(raw_probs)
-    assert len(calibrated_probs) == n
-    assert ((calibrated_probs >= 0.0) & (calibrated_probs <= 1.0)).all()
-
-    # Evaluation
-    metrics = ModelEvaluator.evaluate(y, calibrated_probs)
-    assert "roc_auc" in metrics
-    assert "brier_score" in metrics
-    assert "lift_at_10pct" in metrics
-    assert metrics["brier_score"] >= 0.0
+def test_dataset_builder_rejects_incomplete_label_window(synthetic_data):
+    builder = DatasetBuilder(MultiDomainFeatureBuilder(synthetic_data))
+    last_day = int(synthetic_data.transactions["DAY"].max())
+    with pytest.raises(ValueError, match="exceeds last observed DAY"):
+        builder.build_snapshot(cutoff=last_day - 3, horizon_days=7)
 
 
-def test_model_registry_governance_gate(tmp_path):
+def test_dataset_builder_splits_keep_categoricals(synthetic_data, small_training_config):
+    splits = DatasetBuilder(MultiDomainFeatureBuilder(synthetic_data, 60)).build_splits(small_training_config)
+    for split in splits.values():
+        assert list(split.X.columns) == MODEL_FEATURES
+        for col in CATEGORICAL_FEATURES:
+            assert split.X[col].dtype.name == "category"
+    n_hh = len(synthetic_data.households)
+    assert len(splits["fit"].frame) == n_hh * len(small_training_config.fit_cutoffs)
+
+
+def test_config_rejects_overlapping_splits():
+    with pytest.raises(ValueError, match="Temporal leakage"):
+        TrainingConfig(horizon_days=14, fit_cutoffs=(100, 200), val_cutoffs=(210,), test_cutoffs=(300,))
+
+
+def test_calibrators_and_selection():
+    rng = np.random.default_rng(0)
+    raw = rng.uniform(0, 1, 3000)
+    y = (rng.uniform(0, 1, 3000) < raw ** 2).astype(int)  # raw scores are over-confident
+    for cal in (PlattCalibrator(), IsotonicCalibrator()):
+        p = cal.fit(raw, y).predict_proba(raw)
+        assert ((p >= 0) & (p <= 1)).all()
+        assert expected_calibration_error(y, p) < expected_calibration_error(y, raw)
+
+    chosen, report = select_calibrator(raw, y, n_folds=3)
+    assert set(report) == {"none", "platt", "isotonic"}
+    assert chosen.method != "none"
+
+
+def test_evaluator_reports_lift_ceiling():
+    y = np.array([1] * 70 + [0] * 30)
+    p = np.linspace(1, 0, 100)
+    m = ModelEvaluator.evaluate(y, p)
+    assert m["max_attainable_lift_10"] == pytest.approx(1 / 0.7, rel=1e-3)
+    assert m["lift_at_10pct"] <= m["max_attainable_lift_10"]
+    assert {"roc_auc", "pr_auc", "brier_score", "ece", "top_decile_lift"} <= set(m)
+
+
+def test_governance_gate(tmp_path):
     registry = ModelRegistry(registry_dir=tmp_path)
+    assert registry.evaluate_governance_gate({"roc_auc": 0.85, "brier_score": 0.16, "lift_at_10pct": 1.8})["passed"]
+    assert not registry.evaluate_governance_gate({"roc_auc": 0.6, "brier_score": 0.25, "lift_at_10pct": 1.1})["passed"]
 
-    # Test gate passing
-    passing_metrics = {"roc_auc": 0.85, "brier_score": 0.16, "lift_at_10pct": 1.80}
-    gate_pass = registry.evaluate_governance_gate(passing_metrics)
-    assert gate_pass["passed"] is True
 
-    # Test gate failing
-    failing_metrics = {"roc_auc": 0.60, "brier_score": 0.25, "lift_at_10pct": 1.10}
-    gate_fail = registry.evaluate_governance_gate(failing_metrics)
-    assert gate_fail["passed"] is False
-
-    # Test model packaging & promotion
-    np.random.seed(42)
-    X = pd.DataFrame(np.random.randn(50, len(MODEL_FEATURES)), columns=MODEL_FEATURES)
-    y = np.random.choice([0, 1], size=50)
-    trainer = ModelTrainer(features=MODEL_FEATURES, lgbm_params={"n_estimators": 5, "min_child_samples": 2, "verbosity": -1})
-    model = trainer.train_lightgbm(X, y)
-
-    promoted_file = registry.register_and_promote(
-        model=model,
-        features=MODEL_FEATURES,
-        metrics=passing_metrics,
-        fit_cutoffs=[300, 400],
-        val_cutoffs=[500],
+def test_end_to_end_training_and_promotion(synthetic_data, small_training_config, tmp_path):
+    registry_dir = tmp_path / "registry"
+    summary = run_training_pipeline(
+        config=small_training_config,
+        data=synthetic_data,
+        output_dir=tmp_path / "out",
+        registry_dir=registry_dir,
+        force_promote=True,
     )
-    assert promoted_file.exists()
-    assert (tmp_path / "latest_model_manifest.json").exists()
+
+    assert summary["promoted"] is True
+    assert summary["test_metrics"]["roc_auc"] > 0.6
+    assert summary["calibration_method"] in {"none", "platt", "isotonic"}
+    assert set(summary["baselines"]) == {"logistic_regression", "recency_rule"}
+
+    bundle = joblib.load(registry_dir / "champion_model.joblib")
+    assert bundle["schema_version"] == 2
+    assert bundle["horizon_days"] == small_training_config.horizon_days
+    assert bundle["features"] == MODEL_FEATURES
+    assert bundle["data_fingerprint"] == synthetic_data.fingerprint()
+    assert list(bundle["test_cutoffs"]) == list(small_training_config.test_cutoffs)
+    assert "source_project" not in bundle
+
+    manifest = json.loads((registry_dir / "latest_model_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["horizon_days"] == small_training_config.horizon_days
+    assert manifest["git_sha"]
+
+    # The promoted bundle is servable and reproduces the pipeline's own test predictions.
+    predictor = PropensityPredictor(model_path=registry_dir / "champion_model.joblib")
+    builder = MultiDomainFeatureBuilder(synthetic_data, lookback_days=small_training_config.lookback_days)
+    test = DatasetBuilder(builder).build(small_training_config.test_cutoffs, small_training_config.horizon_days)
+    served = ModelEvaluator.evaluate(test["target"], predictor.predict_proba(test))
+    assert served["roc_auc"] == pytest.approx(summary["test_metrics"]["roc_auc"], abs=1e-9)
+
+
+def test_gate_failure_blocks_promotion(synthetic_data, small_training_config, tmp_path):
+    strict = small_training_config.with_overrides(
+        gate=type(small_training_config.gate)(min_auc=0.999, max_brier=0.0, min_lift_10=99.0)
+    )
+    summary = run_training_pipeline(
+        config=strict, data=synthetic_data, output_dir=tmp_path / "out", registry_dir=tmp_path / "registry",
+    )
+    assert summary["promoted"] is False
+    assert not (tmp_path / "registry" / "champion_model.joblib").exists()
+    assert pd.io.common.file_exists(summary["candidate_path"])
+
+
+def test_no_promote_never_touches_registry(synthetic_data, small_training_config, tmp_path):
+    summary = run_training_pipeline(
+        config=small_training_config, data=synthetic_data, output_dir=tmp_path / "out",
+        registry_dir=tmp_path / "registry", promote=False, force_promote=True,
+    )
+    assert summary["promoted"] is False
+    assert not (tmp_path / "registry" / "champion_model.joblib").exists()

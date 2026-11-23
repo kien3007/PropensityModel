@@ -9,6 +9,8 @@ import logging
 import time
 from typing import Any, Dict, Optional
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 from src.config.settings import settings
 
@@ -29,17 +31,22 @@ class SpeedLayerProcessor:
         host = settings.REDIS_HOST
         if host in ("localhost", "0.0.0.0"):
             host = "127.0.0.1"
+        connection_kwargs = dict(
+            host=host,
+            port=settings.REDIS_PORT,
+            db=settings.REDIS_DB,
+            password=settings.REDIS_PASSWORD,
+            decode_responses=True,
+            socket_timeout=0.5,
+            socket_connect_timeout=0.5,
+        )
         try:
-            r = redis.Redis(
-                host=host,
-                port=settings.REDIS_PORT,
-                db=settings.REDIS_DB,
-                password=settings.REDIS_PASSWORD,
-                decode_responses=True,
-                socket_timeout=0.5,
-            )
-            r.ping()
-            self.redis_client = r
+            # Probe once with retries disabled: redis-py's default retry policy turns an
+            # unreachable server into a ~25s stall before the in-memory fallback kicks in.
+            probe = redis.Redis(retry=Retry(NoBackoff(), 0), **connection_kwargs)
+            probe.ping()
+            probe.close()
+            self.redis_client = redis.Redis(**connection_kwargs)
             logger.info("SpeedLayer connected to Redis successfully.")
         except Exception as e:
             logger.warning(f"Redis not available ({e}). Using in-memory fallback for SpeedLayer.")

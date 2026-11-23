@@ -6,7 +6,6 @@ from __future__ import annotations
 import datetime
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.scheduler.daemon import MLSystemScheduler, ScheduledTask
 from dags.dag_weekly_batch_propensity import dag as weekly_dag

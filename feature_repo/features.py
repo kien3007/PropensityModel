@@ -5,7 +5,7 @@ Includes 28 multi-domain Point-in-Time features.
 from datetime import timedelta
 from pathlib import Path
 from feast import FeatureView, Field, FileSource
-from feast.types import Float32, Int64, String
+from feast.types import Float32, String
 
 try:
     from entities import household

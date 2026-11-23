@@ -1,77 +1,76 @@
 """
-Dataset Builder Module for Model Training and Retraining.
-Constructs temporal multi-snapshot training and validation datasets with prospective binary labels.
+Dataset Builder for training, validation and out-of-time test splits.
+
+Each row is one (household, cutoff) pair: features computed strictly from DAY <= cutoff
+by the shared `MultiDomainFeatureBuilder`, target = purchase in (cutoff, cutoff + horizon].
 """
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Dict, Sequence
+
 import pandas as pd
 
-from src.features.pit_extractor import PointInTimeFeatureExtractor, MODEL_FEATURES
+from src.config.model_config import TrainingConfig
+from src.features.contract import CATEGORICAL_FEATURES, MODEL_FEATURES, apply_categorical_dtypes
+from src.features.pit_extractor import MultiDomainFeatureBuilder
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class TemporalSplit:
+    name: str
+    frame: pd.DataFrame  # household_key, cutoff_day, <features>, target
+
+    @property
+    def X(self) -> pd.DataFrame:
+        return self.frame[MODEL_FEATURES]
+
+    @property
+    def y(self) -> pd.Series:
+        return self.frame["target"]
+
+    @property
+    def positive_rate(self) -> float:
+        return float(self.frame["target"].mean())
+
+
 class DatasetBuilder:
-    """
-    Builds time-split datasets across multiple historical cutoffs without future leakage.
-    """
+    """Builds leakage-free multi-cutoff datasets from one `MultiDomainFeatureBuilder`."""
 
-    @staticmethod
-    def build_snapshot_with_target(
-        transactions: pd.DataFrame,
-        cutoff_day: int,
-        horizon_days: int = 7,
-        feature_cols: Optional[List[str]] = None,
-    ) -> pd.DataFrame:
-        """
-        Extracts features strictly for DAY <= cutoff_day, and sets target Y in (cutoff, cutoff + horizon_days].
-        Target Y = 1 if household made at least 1 purchase in the subsequent horizon; else 0.
-        """
-        feats = feature_cols or MODEL_FEATURES
-        snapshot = PointInTimeFeatureExtractor.extract_features(
-            transactions=transactions,
-            cutoff=cutoff_day,
-            feature_cols=feats,
-        )
+    def __init__(self, features: MultiDomainFeatureBuilder) -> None:
+        self.features = features
 
-        # Labeling: Active buyers in prospective horizon (cutoff, cutoff + horizon_days]
-        future_tx = transactions.loc[
-            (transactions["DAY"] > cutoff_day) & (transactions["DAY"] <= cutoff_day + horizon_days)
-        ]
-        future_buyers = set(future_tx["household_key"].unique())
-
-        snapshot["target"] = snapshot["household_key"].isin(future_buyers).astype(int)
+    def build_snapshot(self, cutoff: int, horizon_days: int) -> pd.DataFrame:
+        last_day = self.features.last_observed_day()
+        if cutoff + horizon_days > last_day:
+            raise ValueError(
+                f"Cutoff {cutoff} + horizon {horizon_days} exceeds last observed DAY {last_day}: "
+                "labels would be incomplete"
+            )
+        feats = self.features.features_at(cutoff)
+        labels = self.features.labels_at(cutoff, horizon_days)
+        snapshot = feats.merge(labels, on=["household_key", "cutoff_day"], how="inner", validate="one_to_one")
         logger.info(
-            f"Built snapshot DAY={cutoff_day} (Horizon={horizon_days}d): "
-            f"{len(snapshot)} households, positive rate: {snapshot['target'].mean():.4f}"
+            f"Snapshot DAY={cutoff} (horizon={horizon_days}d): {len(snapshot):,} households, "
+            f"positive rate {snapshot['target'].mean():.4f}"
         )
         return snapshot
 
-    @staticmethod
-    def build_multi_cutoff_dataset(
-        transactions: pd.DataFrame,
-        cutoffs: List[int],
-        horizon_days: int = 7,
-        feature_cols: Optional[List[str]] = None,
-    ) -> pd.DataFrame:
-        """
-        Generates and stacks snapshots across multiple cutoff days.
-        """
-        frames = []
-        for cutoff in sorted(cutoffs):
-            df = DatasetBuilder.build_snapshot_with_target(
-                transactions=transactions,
-                cutoff_day=cutoff,
-                horizon_days=horizon_days,
-                feature_cols=feature_cols,
-            )
-            frames.append(df)
+    def build(self, cutoffs: Sequence[int], horizon_days: int) -> pd.DataFrame:
+        frames = [self.build_snapshot(c, horizon_days) for c in sorted(cutoffs)]
+        # Re-apply categorical dtypes after concat: per-snapshot category sets differ and
+        # pd.concat would otherwise degrade them to object dtype.
+        return apply_categorical_dtypes(pd.concat(frames, ignore_index=True), CATEGORICAL_FEATURES)
 
-        combined = pd.concat(frames, ignore_index=True)
-        logger.info(
-            f"Built multi-cutoff dataset: {len(combined)} rows across cutoffs {cutoffs}, "
-            f"overall positive rate: {combined['target'].mean():.4f}"
-        )
-        return combined
+    def build_splits(self, config: TrainingConfig) -> Dict[str, TemporalSplit]:
+        splits = {
+            "fit": TemporalSplit("fit", self.build(config.fit_cutoffs, config.horizon_days)),
+            "val": TemporalSplit("val", self.build(config.val_cutoffs, config.horizon_days)),
+            "test": TemporalSplit("test", self.build(config.test_cutoffs, config.horizon_days)),
+        }
+        for split in splits.values():
+            logger.info(f"Split '{split.name}': {len(split.frame):,} rows, positive rate {split.positive_rate:.4f}")
+        return splits

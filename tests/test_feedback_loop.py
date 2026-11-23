@@ -3,8 +3,6 @@ Unit tests for Ground-Truth Feedback Loop and Prospective Attribution.
 """
 from __future__ import annotations
 
-import datetime
-from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
@@ -71,4 +69,4 @@ def test_ground_truth_attribution_mock_evaluation(temp_lakehouse, tmp_path):
         con.close()
 
     # Verify JSON report was created
-    assert (tmp_path / f"feedback_attribution_day_100.json").exists()
+    assert (tmp_path / "feedback_attribution_day_100.json").exists()

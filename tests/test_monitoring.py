@@ -3,20 +3,13 @@ Unit tests for Model & Data Drift Monitoring and Prometheus Metrics Exporter.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import numpy as np
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
 from src.monitoring.drift_detector import DataDriftDetector
 from src.monitoring.metrics import (
-    generate_prometheus_payload,
     record_drift_metrics,
-    record_prediction,
-    record_speed_event,
-    update_model_info_gauge,
 )
 from src.serving.api import app
 
