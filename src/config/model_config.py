@@ -8,7 +8,7 @@ from here so the champion's definition cannot silently drift between components.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,10 @@ class GateConfig:
     # 1. Absolute quality (candidate alone)
     min_auc: float = 0.75
     min_brier_skill: float = 0.20      # 1 - Brier / Brier(base-rate forecast)
-    min_normalized_lift_10: float = 0.85  # (lift@10% - 1) / (max attainable lift - 1)
+    # (lift@10% - 1) / (max attainable lift - 1). Suited to high base rates; at low base rates
+    # (max lift ~9x) use the raw min_lift_10 instead. None disables a check.
+    min_normalized_lift_10: Optional[float] = 0.85
+    min_lift_10: Optional[float] = None
     min_pr_auc_gain: float = 0.60      # (PR-AUC - base rate) / (1 - base rate)
     max_ece: float = 0.03
 
@@ -40,10 +43,15 @@ class GateConfig:
 
 @dataclass(frozen=True)
 class TrainingConfig:
+    # Prediction target (src/features/targets.py): eligibility + label definition.
+    target: str = "purchase"
+    # Registry location relative to models/ ("" = models/ itself, kept for the purchase champion).
+    registry_subdir: str = ""
+
     # Feature contract version the model is trained against (see src/features/contract.py).
     feature_set_version: str = "multidomain_v1"
 
-    # Target: household makes >= 1 valid basket in (cutoff, cutoff + horizon_days].
+    # Label window: (cutoff, cutoff + horizon_days].
     horizon_days: int = 14
     # Observation window used by the point-in-time feature extractor.
     lookback_days: int = 180
@@ -102,6 +110,9 @@ class TrainingConfig:
                     f"Temporal leakage: last {prev_name} cutoff {max(prev)} + horizon {self.horizon_days} "
                     f"overlaps first {next_name} cutoff {min(nxt)}"
                 )
+        from src.features.targets import get_target
+
+        get_target(self.target)
         unknown = set(self.calibration_methods) - {"none", "platt", "isotonic"}
         if unknown:
             raise ValueError(f"Unknown calibration methods: {sorted(unknown)}")
@@ -111,6 +122,7 @@ class TrainingConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "target": self.target,
             "feature_set_version": self.feature_set_version,
             "horizon_days": self.horizon_days,
             "lookback_days": self.lookback_days,
@@ -126,3 +138,24 @@ class TrainingConfig:
 
 
 DEFAULT_TRAINING_CONFIG = TrainingConfig()
+
+# Second model: 21-day lapse of regular shoppers (base rate ~0.11 on ~1,850 eligible households).
+# Gate thresholds were fixed before the first lapse model was trained.
+LAPSE_TRAINING_CONFIG = TrainingConfig(
+    target="lapse",
+    registry_subdir="lapse",
+    horizon_days=21,
+    gate=GateConfig(
+        min_auc=0.70,
+        min_brier_skill=0.05,
+        min_normalized_lift_10=None,
+        min_lift_10=2.0,
+        min_pr_auc_gain=0.10,
+        max_ece=0.03,
+    ),
+)
+
+TRAINING_CONFIGS: Dict[str, TrainingConfig] = {
+    DEFAULT_TRAINING_CONFIG.target: DEFAULT_TRAINING_CONFIG,
+    LAPSE_TRAINING_CONFIG.target: LAPSE_TRAINING_CONFIG,
+}

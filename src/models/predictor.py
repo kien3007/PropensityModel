@@ -50,6 +50,7 @@ def _normalise_bundle(package: Dict[str, Any]) -> Dict[str, Any]:
         name, inner = next(iter(bundles.items()))
         spec = {
             "schema_version": 1,
+            "target": "purchase",
             "bundle_name": name,
             "model": inner["model"],
             "calibrator": inner.get("calibrator"),
@@ -78,15 +79,23 @@ def _normalise_bundle(package: Dict[str, Any]) -> Dict[str, Any]:
     unknown_cats = set(spec.get("categorical_features", [])) - set(spec["features"])
     if unknown_cats:
         raise ModelBundleError(f"categorical_features not in features: {sorted(unknown_cats)}")
+    spec.setdefault("target", "purchase")  # v2 bundles written before targets existed
     if not spec.get("horizon_days"):
         raise ModelBundleError("Model bundle does not declare its prediction horizon (horizon_days)")
     return spec
 
 
 class PropensityPredictor:
-    def __init__(self, model_path: Optional[Path | str] = None, expected_horizon_days: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        model_path: Optional[Path | str] = None,
+        expected_horizon_days: Optional[int] = None,
+        expected_target: Optional[str] = None,
+    ) -> None:
         self.model_path = Path(model_path or settings.MODEL_PATH)
         self.expected_horizon_days = expected_horizon_days
+        self.expected_target = expected_target
+        self.target: str = ""
         self.bundle: Dict[str, Any] = {}
         self.model = None
         self.calibrator = None
@@ -109,7 +118,13 @@ class PropensityPredictor:
                 f"caller expects {self.expected_horizon_days} days"
             )
 
+        if self.expected_target is not None and spec["target"] != self.expected_target:
+            raise ModelBundleError(
+                f"Model predicts target {spec['target']!r}, caller expects {self.expected_target!r}"
+            )
+
         self.bundle = spec
+        self.target = spec["target"]
         self.bundle_name = spec["bundle_name"]
         self.model = spec["model"]
         self.calibrator = spec.get("calibrator")
@@ -119,7 +134,7 @@ class PropensityPredictor:
         self.horizon_days = int(spec["horizon_days"])
         self.epsilon = spec.get("epsilon", 1e-4)
         logger.info(
-            f"Loaded champion '{self.bundle_name}' (schema v{spec['schema_version']}, "
+            f"Loaded champion '{self.bundle_name}' (target {self.target}, schema v{spec['schema_version']}, "
             f"{self.feature_set_version}, {len(self.features)} features, horizon {self.horizon_days}d)."
         )
 
@@ -156,15 +171,21 @@ class PropensityPredictor:
             raise ValueError("Model produced probabilities outside [0, 1]")
         return p
 
+    @staticmethod
+    def _rank_and_decile(df: pd.DataFrame, score_col: str) -> pd.DataFrame:
+        # Rank: 1 = highest score. Deciles are rank-based so that ties (isotonic calibration
+        # produces plateaus) cannot collapse quantile bin edges. Decile 10 = top 10%.
+        df["rank"] = df[score_col].rank(ascending=False, method="first").astype(int)
+        df["decile"] = pd.qcut(-df["rank"], q=10, labels=list(range(1, 11))).astype(int)
+        return df
+
     def score_households(self, snapshot_df: pd.DataFrame) -> pd.DataFrame:
-        """Scores a household snapshot and assigns business deciles and action tiers."""
+        """Scores a snapshot with the target-appropriate deciles and action tiers."""
+        if self.target == "lapse":
+            return self.score_lapse_risk(snapshot_df)
         df = snapshot_df.copy()
         df["purchase_probability"] = self.predict_proba(df)
-
-        # Rank: 1 = highest propensity. Deciles are rank-based so that ties (isotonic
-        # calibration produces plateaus) cannot collapse quantile bin edges.
-        df["rank"] = df["purchase_probability"].rank(ascending=False, method="first").astype(int)
-        df["decile"] = pd.qcut(-df["rank"], q=10, labels=list(range(1, 11))).astype(int)
+        df = self._rank_and_decile(df, "purchase_probability")
 
         prob = df["purchase_probability"]
         overdue = df["urgency_ratio"] if "urgency_ratio" in df.columns else pd.Series(0.0, index=df.index)
@@ -177,5 +198,25 @@ class PropensityPredictor:
             [df["decile"] >= 9, df["decile"] >= 7, df["decile"] >= 5],
             ["VIP_COUPON_HALO_UPSELL", "CYCLE_ACCELERATION_NUDGE", "STANDARD_ENGAGEMENT"],
             default="WINBACK_OR_HOLDOUT",
+        )
+        return df
+
+    def score_lapse_risk(self, snapshot_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Lapse model (caller passes eligible households): risk rank/decile by p(lapse), plus
+        expected spend at risk = p(lapse) x 90-day spend. Retention actions follow the
+        expected-value ranking, which captured ~2x more spend-at-risk than ranking by
+        p(lapse) alone on the out-of-time test set (docs/analysis/TARGET_ANALYSIS.md).
+        """
+        df = snapshot_df.copy()
+        df["lapse_probability"] = self.predict_proba(df)
+        df = self._rank_and_decile(df, "lapse_probability")
+        df["expected_spend_at_risk"] = df["lapse_probability"] * df["spend_90d"]
+        df["value_rank"] = df["expected_spend_at_risk"].rank(ascending=False, method="first").astype(int)
+        value_decile = pd.qcut(-df["value_rank"], q=10, labels=list(range(1, 11))).astype(int)
+        df["retention_action"] = np.select(
+            [value_decile == 10, value_decile >= 8],
+            ["RETENTION_OFFER", "MONITOR"],
+            default="NO_ACTION",
         )
         return df

@@ -54,14 +54,15 @@ default_args = {
 }
 
 
-def task_train_and_evaluate(**kwargs) -> Dict[str, Any]:
-    """Executes multi-cutoff temporal training and calibration pipeline."""
+def task_train_and_evaluate(target: str = "purchase", **kwargs) -> Dict[str, Any]:
+    """Retrains one target's champion candidate and applies the governance gate."""
+    from src.config.model_config import TRAINING_CONFIGS
     from src.pipelines.train_pipeline import run_training_pipeline
 
-    logger.info("Starting automated model retraining pipeline...")
+    logger.info(f"Starting automated retraining for target '{target}'...")
     # Target, splits and hyper-parameters come from src/config/model_config.py.
     # Automated runs never override the gate: force_promote is a manual, audited action.
-    summary = run_training_pipeline(force_promote=False)
+    summary = run_training_pipeline(config=TRAINING_CONFIGS[target], force_promote=False)
     test_metrics = summary["test_metrics"]
     gate = summary["governance_gate"]
     if not gate["passed"]:
@@ -128,6 +129,15 @@ with DAG(
     retrain_task = PythonOperator(
         task_id="retrain_and_evaluate_candidate",
         python_callable=task_train_and_evaluate,
+        op_kwargs={"target": "purchase"},
+        provide_context=True,
+    )
+
+    # Second model (lapse risk). It is not served by the online API, so no hot-reload is needed.
+    retrain_lapse_task = PythonOperator(
+        task_id="retrain_and_evaluate_lapse_candidate",
+        python_callable=task_train_and_evaluate,
+        op_kwargs={"target": "lapse"},
         provide_context=True,
     )
 

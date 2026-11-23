@@ -35,6 +35,7 @@ ENV/
 !models/champion_model.joblib
 # Registry archives and audit log are runtime artefacts (champion + manifest stay tracked).
 /models/history/
+/models/*/history/
 
 # Testing & Coverage
 .pytest_cache/

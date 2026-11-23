@@ -6,7 +6,7 @@ scores the active champion on the identical out-of-time test rows, and passes wh
 |AUC(candidate) - AUC(champion)| <= reproduction_auc_tolerance.
 
 Usage:
-    python -m scripts.reproduce_champion [--data-source lakehouse|csv] [--output-dir DIR]
+    python -m scripts.reproduce_champion [--target purchase|lapse] [--data-source lakehouse|csv] [--output-dir DIR]
 
 Exit code 0 = reproduced, 1 = not reproduced.
 """
@@ -18,7 +18,8 @@ import logging
 import sys
 from pathlib import Path
 
-from src.config.model_config import DEFAULT_TRAINING_CONFIG
+from src.config.model_config import TRAINING_CONFIGS
+from src.features.targets import get_target
 from src.config.settings import settings
 from src.data.loader import DataLoader
 from src.features.pit_extractor import MultiDomainFeatureBuilder
@@ -26,6 +27,7 @@ from src.models.predictor import PropensityPredictor
 from src.pipelines.train_pipeline import run_training_pipeline
 from src.training.dataset_builder import DatasetBuilder
 from src.training.evaluator import ModelEvaluator
+from src.training.model_registry import registry_dir_for
 
 logger = logging.getLogger("ReproduceChampion")
 
@@ -34,13 +36,18 @@ COMPARED_METRICS = ("roc_auc", "pr_auc", "brier_score", "log_loss", "ece", "lift
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--target", choices=sorted(TRAINING_CONFIGS), default="purchase")
     parser.add_argument("--data-source", choices=["lakehouse", "csv"], default=None)
     parser.add_argument("--output-dir", type=Path, default=settings.OUTPUT_DIR / "reproduction")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-    cfg = DEFAULT_TRAINING_CONFIG
-    champion = PropensityPredictor(expected_horizon_days=cfg.horizon_days)
+    cfg = TRAINING_CONFIGS[args.target]
+    champion = PropensityPredictor(
+        model_path=registry_dir_for(cfg) / "champion_model.joblib",
+        expected_horizon_days=cfg.horizon_days,
+        expected_target=cfg.target,
+    )
     if champion.feature_set_version != cfg.feature_set_version:
         logger.error(f"Champion feature set {champion.feature_set_version} != config {cfg.feature_set_version}")
         return 1
@@ -50,7 +57,7 @@ def main() -> int:
     candidate = summary["test_metrics"]
 
     builder = MultiDomainFeatureBuilder(data, lookback_days=cfg.lookback_days)
-    test = DatasetBuilder(builder).build(cfg.test_cutoffs, cfg.horizon_days)
+    test = DatasetBuilder(builder).build(cfg.test_cutoffs, cfg.horizon_days, get_target(cfg.target))
     incumbent = ModelEvaluator.evaluate(test["target"], champion.predict_proba(test))
 
     delta_auc = candidate["roc_auc"] - incumbent["roc_auc"]
@@ -72,7 +79,7 @@ def main() -> int:
         "git_sha": summary["git_sha"],
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = args.output_dir / "reproduction_report.json"
+    report_path = args.output_dir / f"reproduction_report_{cfg.target}.json"
     report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
 
     print(f"\n{'metric':<16}{'champion':>12}{'candidate':>12}{'delta':>10}")

@@ -63,8 +63,9 @@ def build_bundle(
     created_at = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     return {
         "schema_version": BUNDLE_SCHEMA_VERSION,
-        "bundle_name": bundle_name or f"lgbm_{config.feature_set_version}_h{config.horizon_days}_{created_at}",
+        "bundle_name": bundle_name or f"lgbm_{config.target}_{config.feature_set_version}_h{config.horizon_days}_{created_at}",
         "created_at": created_at,
+        "target": config.target,
         "feature_set_version": config.feature_set_version,
         "features": list(features),
         "categorical_features": list(categorical_features),
@@ -132,6 +133,12 @@ def _manifest_for(package: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def registry_dir_for(config: TrainingConfig) -> Path:
+    """models/ for the purchase champion (historical location), models/<subdir>/ otherwise."""
+    base = settings.BASE_DIR / "models"
+    return base / config.registry_subdir if config.registry_subdir else base
+
+
 class ModelRegistry:
     """
     File-based registry:
@@ -169,15 +176,22 @@ class ModelRegistry:
         """Absolute, base-rate-relative quality checks on out-of-time test metrics."""
         g = gate or GateConfig()
         m = candidate_metrics
+        rules = [  # (metric, threshold, higher_is_better); None threshold = check disabled
+            ("roc_auc", g.min_auc, True),
+            ("brier_skill_score", g.min_brier_skill, True),
+            ("normalized_lift_10", g.min_normalized_lift_10, True),
+            ("lift_at_10pct", g.min_lift_10, True),
+            ("pr_auc_gain", g.min_pr_auc_gain, True),
+            ("ece", g.max_ece, False),
+        ]
         checks = {
-            "roc_auc": {"value": m["roc_auc"], "threshold": g.min_auc, "pass": m["roc_auc"] >= g.min_auc},
-            "brier_skill_score": {"value": m["brier_skill_score"], "threshold": g.min_brier_skill,
-                                  "pass": m["brier_skill_score"] >= g.min_brier_skill},
-            "normalized_lift_10": {"value": m["normalized_lift_10"], "threshold": g.min_normalized_lift_10,
-                                   "pass": m["normalized_lift_10"] >= g.min_normalized_lift_10},
-            "pr_auc_gain": {"value": m["pr_auc_gain"], "threshold": g.min_pr_auc_gain,
-                            "pass": m["pr_auc_gain"] >= g.min_pr_auc_gain},
-            "ece": {"value": m["ece"], "threshold": g.max_ece, "pass": m["ece"] <= g.max_ece},
+            metric: {
+                "value": m[metric],
+                "threshold": threshold,
+                "pass": m[metric] >= threshold if higher else m[metric] <= threshold,
+            }
+            for metric, threshold, higher in rules
+            if threshold is not None
         }
         passed = all(c["pass"] for c in checks.values())
         if passed:
