@@ -1,0 +1,20 @@
+# Alertmanager routing. The default receiver only records alerts (visible in the
+# Alertmanager UI on :9093). Add a real channel by uncommenting one of the examples.
+route:
+  receiver: default
+  group_by: ["alertname", "target"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: default
+      repeat_interval: 1h
+
+receivers:
+  - name: default
+    # webhook_configs:
+    #   - url: "http://ops-webhook.internal/alerts"
+    # slack_configs:
+    #   - api_url: "${SLACK_WEBHOOK_URL}"
+    #     channel: "#propensity-alerts"

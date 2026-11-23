@@ -10,6 +10,7 @@ import json
 import logging
 import signal
 import socket
+import time
 import uuid
 from typing import Any, Dict, Optional
 
@@ -20,7 +21,10 @@ except (ImportError, ModuleNotFoundError):
     KAFKA_LIB_AVAILABLE = False
 
 from src.common.redis_client import InfrastructureUnavailable
+from prometheus_client import start_http_server
+
 from src.config.settings import settings
+from src.monitoring.metrics import PROPENSITY_CONSUMED_EVENTS_TOTAL, PROPENSITY_CONSUMER_LAG
 from src.speed_layer.delta_stream import SpeedLayerProcessor
 
 logger = logging.getLogger("KafkaEventBus")
@@ -182,6 +186,8 @@ class KafkaEventConsumerWorker:
 
         self._running = True
         processed = 0
+        start_http_server(settings.CONSUMER_METRICS_PORT)  # scraped by Prometheus (job speed-consumer)
+        last_lag_check = 0.0
 
         def shutdown(signum, frame):
             logger.info("Shutdown signal received for Kafka consumer.")
@@ -194,11 +200,16 @@ class KafkaEventConsumerWorker:
             logger.info("Kafka Consumer is listening for real-time POS & App events...")
             while self._running:
                 records = consumer.poll(timeout_ms=1000)
+                if time.monotonic() - last_lag_check >= 15:
+                    last_lag_check = time.monotonic()
+                    PROPENSITY_CONSUMER_LAG.set(self.current_lag(consumer))
                 for topic_partition, messages in records.items():
                     for msg in messages:
                         event = msg.value
                         delta = self.processor.process_event(event)
                         processed += 1
+                        PROPENSITY_CONSUMED_EVENTS_TOTAL.labels(
+                            outcome="duplicate" if delta.get("duplicate") else "applied").inc()
                         logger.debug(f"Consumed event from Kafka for HH {event.get('household_key')}: {delta}")
 
                         if max_messages and processed >= max_messages:
@@ -209,6 +220,15 @@ class KafkaEventConsumerWorker:
             logger.info(f"Kafka consumer closed. Total processed: {processed} events.")
 
         return processed
+
+    @staticmethod
+    def current_lag(consumer: Any) -> int:
+        """Sum over assigned partitions of (log end offset - consumer position)."""
+        partitions = list(consumer.assignment())
+        if not partitions:
+            return 0
+        end_offsets = consumer.end_offsets(partitions)
+        return int(sum(max(0, end_offsets[tp] - consumer.position(tp)) for tp in partitions))
 
 
 def main():

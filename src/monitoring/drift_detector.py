@@ -31,7 +31,7 @@ class DataDriftDetector:
     """
 
     def __init__(self, output_dir: Optional[Path | str] = None) -> None:
-        self.output_dir = Path(output_dir or (settings.BASE_DIR / "output" / "reports"))
+        self.output_dir = Path(output_dir or (settings.OUTPUT_DIR / "reports"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -228,6 +228,9 @@ class DataDriftDetector:
         reference_scores: Optional[np.ndarray] = None,
         current_scores: Optional[np.ndarray] = None,
         run_id: Optional[str] = None,
+        target: str = "purchase",
+        reference_cutoffs: Optional[List[int]] = None,
+        current_cutoff: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generates full production drift report including feature drift, prediction drift,
@@ -259,6 +262,9 @@ class DataDriftDetector:
 
         audit_report: Dict[str, Any] = {
             "run_id": run_id,
+            "target": target,
+            "reference_cutoffs": reference_cutoffs,
+            "current_cutoff": current_cutoff,
             "evaluated_at": datetime.datetime.now().isoformat(),
             "overall_status": overall_status,
             "action_recommended": action_recommended,
@@ -278,7 +284,7 @@ class DataDriftDetector:
         with open(report_file, "w") as f:
             json.dump(audit_report, f, indent=2)
 
-        latest_file = self.output_dir / "drift_report_latest.json"
+        latest_file = self.output_dir / f"drift_report_{target}_latest_full.json"
         with open(latest_file, "w") as f:
             json.dump(audit_report, f, indent=2)
 

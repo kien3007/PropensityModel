@@ -1,0 +1,74 @@
+# Propensity platform alerts (loaded by Prometheus, routed by Alertmanager).
+# Thresholds mirror src/config/settings.py: DRIFT_PSI_ALERT=0.20, REALIZED_AUC_DROP_ALERT=0.05.
+groups:
+  - name: propensity-model-quality
+    rules:
+      - alert: PropensityFeatureDriftHigh
+        expr: max(propensity_feature_drift_psi) > 0.20
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feature drift PSI {{ $value | printf \"%.2f\" }} above 0.20"
+          description: >-
+            At least one champion feature drifted versus the champion's out-of-time reference window.
+            Check data/outputs/reports/drift_purchase_latest.json.
+
+      - alert: PropensityDriftCritical
+        expr: propensity_drift_status == 2
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Drift audit CRITICAL for target {{ $labels.target }}"
+          description: "The scheduler starts an out-of-cycle retraining (AUTO_RETRAIN_ON_DEGRADATION)."
+
+      - alert: PropensityRealizedAucDrop
+        expr: propensity_realized_auc_drop > 0.05
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Realized AUC dropped {{ $value | printf \"%.3f\" }} below the accepted AUC ({{ $labels.target }})"
+          description: "Ground-truth feedback shows degradation; a retraining candidate is triggered."
+
+  - name: propensity-serving
+    rules:
+      - alert: PropensityPredictLatencyP99High
+        expr: >-
+          histogram_quantile(0.99,
+            sum by (le) (rate(propensity_prediction_latency_seconds_bucket{endpoint="/v1/predict/propensity"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Predict p99 latency {{ $value | humanizeDuration }} above 50 ms"
+
+      - alert: PropensityNoBatchView
+        expr: propensity_batch_view_households{variant="champion"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Serving has no champion batch scores: every answer is cold start"
+          description: "Run the batch pipeline or check its Redis publication."
+
+      - alert: PropensityServingDown
+        expr: up{job="propensity-serving-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Serving API is not being scraped"
+
+  - name: propensity-speed-layer
+    rules:
+      - alert: PropensityKafkaConsumerLagHigh
+        expr: propensity_speed_consumer_lag > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Speed-layer consumer is {{ $value }} events behind"
+          description: "Intraday deltas are stale; fusion rules act on old information."

@@ -151,11 +151,16 @@ class LakehouseEngine:
         con = self.get_connection()
         try:
             demo_parquet = str(self.bronze_dir / "demographics.parquet").replace("\\", "/")
-            demo_sql = (
-                f"LEFT JOIN read_parquet('{demo_parquet}') d ON h.household_key = d.household_key"
+            # Without demographics, join an empty typed relation so the column references stay valid.
+            demo_source = (
+                f"read_parquet('{demo_parquet}')"
                 if (self.bronze_dir / "demographics.parquet").exists()
-                else ""
+                else "(SELECT NULL::BIGINT AS household_key, NULL::VARCHAR AS classification_1, "
+                     "NULL::VARCHAR AS classification_2, NULL::VARCHAR AS classification_3, "
+                     "NULL::VARCHAR AS HOMEOWNER_DESC, NULL::VARCHAR AS classification_4, "
+                     "NULL::VARCHAR AS KID_CATEGORY_DESC WHERE FALSE)"
             )
+            demo_sql = f"LEFT JOIN {demo_source} d ON h.household_key = d.household_key"
 
             con.execute(f"""
                 CREATE OR REPLACE TABLE dim_households AS

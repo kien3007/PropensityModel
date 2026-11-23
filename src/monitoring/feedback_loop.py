@@ -1,8 +1,19 @@
 """
-Ground-Truth Feedback Loop & Model Attribution Module.
-Evaluates historical predictions against realized actual purchases occurring 7 to 14 days later.
-Calculates Realized ROC-AUC, Brier Score, Log Loss, Decile Lift, and Calibration Curves.
-Persists performance attribution to Lakehouse Gold tables and JSON reports.
+Ground-Truth Feedback Loop.
+
+Once a prediction's horizon has elapsed, joins the champion's predictions at a cutoff with
+what actually happened and compares the realized quality with the quality the champion was
+accepted with (its out-of-time test metrics):
+
+- labels use the *training* definition (TargetSpec on trip-level baskets via the shared
+  DataLoader / MultiDomainFeatureBuilder), never a separate CSV query;
+- the horizon is the champion's own horizon;
+- predictions come from Gold `fct_weekly_batch_scores` when the batch ran at that cutoff,
+  otherwise the champion re-scores the cutoff ("replay", e.g. for backfills);
+- degraded = expected AUC - realized AUC > settings.REALIZED_AUC_DROP_ALERT.
+
+Results go to Gold `fct_model_attribution`, a JSON report, and MonitoringState (-> Prometheus).
+`evaluate_fusion_rules` checks the serving-layer heuristics against realized outcomes.
 """
 from __future__ import annotations
 
@@ -11,212 +22,230 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
-import duckdb
+
 import numpy as np
 import pandas as pd
-from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
+from src.config.model_config import TRAINING_CONFIGS
 from src.config.settings import settings
+from src.data.loader import DataLoader, RawDataBundle
+from src.features.pit_extractor import MultiDomainFeatureBuilder
+from src.features.targets import get_target
 from src.lakehouse.engine import LakehouseEngine
+from src.models.predictor import PropensityPredictor
+from src.monitoring.state import MonitoringState
+from src.training.evaluator import ModelEvaluator
+from src.training.model_registry import registry_dir_for
 
 logger = logging.getLogger("FeedbackLoop")
 
+ATTRIBUTION_COLUMNS = {
+    "eval_id": "VARCHAR",
+    "target": "VARCHAR",
+    "cutoff_day": "INTEGER",
+    "horizon_days": "INTEGER",
+    "evaluated_at": "TIMESTAMP",
+    "model_bundle": "VARCHAR",
+    "prediction_source": "VARCHAR",
+    "sample_size": "INTEGER",
+    "base_rate": "DOUBLE",
+    "realized_roc_auc": "DOUBLE",
+    "expected_roc_auc": "DOUBLE",
+    "auc_drop": "DOUBLE",
+    "realized_brier_score": "DOUBLE",
+    "realized_log_loss": "DOUBLE",
+    "realized_top_decile_lift": "DOUBLE",
+    "decile_10_actual_rate": "DOUBLE",
+    "attribution_status": "VARCHAR",
+}
+
 
 class GroundTruthFeedbackLoop:
-    """
-    Automated feedback loop joining historical predictions with realized post-prediction transactions.
-    """
-
     def __init__(
         self,
         lakehouse_engine: Optional[LakehouseEngine] = None,
         output_dir: Optional[Path | str] = None,
+        data: Optional[RawDataBundle] = None,
+        state: Optional[MonitoringState] = None,
     ) -> None:
         self.lakehouse = lakehouse_engine or LakehouseEngine()
-        self.output_dir = Path(output_dir or (settings.BASE_DIR / "output" / "reports"))
+        self.output_dir = Path(output_dir or (settings.OUTPUT_DIR / "reports"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._data = data
+        self._builder: Optional[MultiDomainFeatureBuilder] = None
+        self.state = state or MonitoringState(report_dir=self.output_dir)
         self._ensure_attribution_table()
 
+    @property
+    def builder(self) -> MultiDomainFeatureBuilder:
+        if self._builder is None:
+            self._builder = MultiDomainFeatureBuilder(self._data or DataLoader.from_lakehouse(self.lakehouse))
+        return self._builder
+
     def _ensure_attribution_table(self) -> None:
-        """Creates fct_model_attribution table in Gold Lakehouse if not exists."""
         con = self.lakehouse.get_connection()
         try:
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS fct_model_attribution (
-                    eval_id VARCHAR PRIMARY KEY,
-                    cutoff_day INTEGER,
-                    horizon_days INTEGER,
-                    evaluated_at TIMESTAMP,
-                    sample_size INTEGER,
-                    base_rate DOUBLE,
-                    realized_roc_auc DOUBLE,
-                    realized_brier_score DOUBLE,
-                    realized_log_loss DOUBLE,
-                    realized_top_decile_lift DOUBLE,
-                    decile_10_actual_rate DOUBLE,
-                    attribution_status VARCHAR
-                );
-            """)
+            cols = ", ".join(f"{c} {t}" for c, t in ATTRIBUTION_COLUMNS.items())
+            con.execute(f"CREATE TABLE IF NOT EXISTS fct_model_attribution ({cols});")
+            for col, typ in ATTRIBUTION_COLUMNS.items():  # upgrade tables created by older versions
+                con.execute(f"ALTER TABLE fct_model_attribution ADD COLUMN IF NOT EXISTS {col} {typ};")
         finally:
             con.close()
 
+    # ------------------------------------------------------------ predictions
+    def _stored_predictions(self, cutoff_day: int) -> pd.DataFrame:
+        con = self.lakehouse.get_connection()
+        try:
+            exists = con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'fct_weekly_batch_scores'"
+            ).fetchone()[0]
+            if not exists:
+                return pd.DataFrame()
+            return con.execute(
+                "SELECT household_key, purchase_probability AS probability, decile "
+                "FROM fct_weekly_batch_scores WHERE snapshot_day = ? "
+                "QUALIFY ROW_NUMBER() OVER (PARTITION BY household_key ORDER BY scored_at DESC) = 1",
+                [cutoff_day],
+            ).df()
+        finally:
+            con.close()
+
+    def _replay_predictions(self, predictor: PropensityPredictor, cutoff_day: int) -> pd.DataFrame:
+        feats = self.builder.features_at(cutoff_day)
+        feats = feats[get_target(predictor.target).eligible(feats)]
+        scored = predictor.score_households(feats)
+        prob_col = "lapse_probability" if predictor.target == "lapse" else "purchase_probability"
+        return scored[["household_key", prob_col, "decile"]].rename(columns={prob_col: "probability"})
+
+    # ------------------------------------------------------------- evaluation
     def evaluate_realized_performance(
         self,
-        cutoff_day: int,
-        horizon_days: int = 14,
+        target: str = "purchase",
+        cutoff_day: Optional[int] = None,
         predictions_df: Optional[pd.DataFrame] = None,
-        raw_tx_csv: Optional[Path | str] = None,
+        model_path: Optional[Path | str] = None,
+        backfill: bool = True,
     ) -> Dict[str, Any]:
-        """
-        Joins predictions at cutoff_day with actual transactions in (cutoff_day, cutoff_day + horizon_days].
-        """
-        start_time = datetime.datetime.now()
-        eval_id = f"FB_DAY_{cutoff_day}_{horizon_days}d_{start_time.strftime('%Y%m%d_%H%M%S')}"
-        logger.info(f"=== Starting Ground-Truth Attribution: {eval_id} (Horizon: {cutoff_day} -> {cutoff_day + horizon_days}) ===")
-
-        # 1. Fetch Historical Predictions
-        if predictions_df is None:
-            # Query from Lakehouse Gold fct_weekly_batch_scores or output parquet
-            con = self.lakehouse.get_connection()
-            try:
-                scores_query = f"""
-                    SELECT household_key, purchase_probability, decile, urgency_tier
-                    FROM fct_weekly_batch_scores
-                    WHERE snapshot_day = {cutoff_day}
-                """
-                preds = con.execute(scores_query).df()
-            finally:
-                con.close()
-
-            if len(preds) == 0:
-                # Fallback to output parquet
-                pq_file = settings.OUTPUT_DIR / f"household_scores_day_{cutoff_day}.parquet"
-                if pq_file.exists():
-                    preds = pd.read_parquet(pq_file)
-                else:
-                    raise ValueError(f"No historical predictions found for cutoff day {cutoff_day}")
-        else:
-            preds = predictions_df.copy()
-
-        # 2. Extract Realized Transactions in Prospective Window
-        target_start = cutoff_day + 1
-        target_end = cutoff_day + horizon_days
-
-        tx_path = Path(raw_tx_csv or (settings.DATA_RAW_DIR / "transaction_data.csv"))
-        if not tx_path.exists():
-            raise FileNotFoundError(f"Transactions dataset not found at {tx_path}")
-
-        con = duckdb.connect()
-        try:
-            tx_escaped = str(tx_path).replace("\\", "/")
-            actual_df = con.execute(f"""
-                SELECT DISTINCT household_key::BIGINT AS household_key, 1 AS actual_purchase
-                FROM read_csv_auto('{tx_escaped}')
-                WHERE DAY >= {target_start} AND DAY <= {target_end} AND SALES_VALUE >= 0;
-            """).df()
-        finally:
-            con.close()
-
-        # 3. Join Predictions with Realized Ground-Truth
-        joined = preds[["household_key", "purchase_probability", "decile"]].merge(
-            actual_df, on="household_key", how="left"
+        start = datetime.datetime.now()
+        cfg = TRAINING_CONFIGS[target]
+        predictor = PropensityPredictor(
+            model_path=model_path or (registry_dir_for(cfg) / "champion_model.joblib"), expected_target=target,
         )
-        joined["actual_purchase"] = joined["actual_purchase"].fillna(0).astype(int)
+        horizon = predictor.horizon_days
+        last_day = self.builder.last_observed_day()
+        cutoff = cutoff_day if cutoff_day is not None else last_day - horizon
+        if cutoff + horizon > last_day:
+            raise ValueError(f"Labels for cutoff {cutoff} mature on DAY {cutoff + horizon} > last observed DAY {last_day}")
 
-        y_true = joined["actual_purchase"].to_numpy()
-        y_prob = joined["purchase_probability"].to_numpy()
-
-        # 4. Compute Realized Performance Metrics
-        base_rate = float(np.mean(y_true))
-
-        # Check for binary variety
-        if len(np.unique(y_true)) > 1:
-            realized_auc = float(roc_auc_score(y_true, y_prob))
-            realized_brier = float(brier_score_loss(y_true, y_prob))
-            realized_logloss = float(log_loss(y_true, np.clip(y_prob, 1e-6, 1 - 1e-6)))
+        if predictions_df is not None:
+            preds, source = predictions_df.rename(
+                columns={"purchase_probability": "probability", "lapse_probability": "probability"}), "provided"
         else:
-            realized_auc = 0.50
-            realized_brier = float(brier_score_loss(y_true, y_prob))
-            realized_logloss = 0.0
+            preds, source = (self._stored_predictions(cutoff), "batch") if target == "purchase" else (pd.DataFrame(), "")
+            if preds.empty:
+                if not backfill:
+                    raise ValueError(f"No stored {target} predictions for cutoff {cutoff} and backfill disabled")
+                preds, source = self._replay_predictions(predictor, cutoff), "replay"
 
-        # Decile 10 analysis
-        top_decile = joined[joined["decile"] == 10]
-        decile_10_rate = float(top_decile["actual_purchase"].mean()) if len(top_decile) > 0 else 0.0
-        realized_lift = float(decile_10_rate / base_rate) if base_rate > 0 else 1.0
+        labels = get_target(target).labels(self.builder, cutoff, horizon)
+        joined = preds[["household_key", "probability", "decile"]].merge(
+            labels[["household_key", "target"]], on="household_key", how="inner")
+        if joined["target"].nunique() < 2:
+            raise ValueError(f"Realized labels at cutoff {cutoff} are single-class; AUC undefined")
 
-        # Decile-by-decile conversion table
-        decile_summary = []
-        for d in range(1, 11):
-            sub = joined[joined["decile"] == d]
-            cnt = len(sub)
-            conv_rate = float(sub["actual_purchase"].mean()) if cnt > 0 else 0.0
-            mean_pred = float(sub["purchase_probability"].mean()) if cnt > 0 else 0.0
-            decile_summary.append({
-                "decile": d,
-                "count": cnt,
-                "mean_predicted_prob": round(mean_pred, 4),
-                "actual_conversion_rate": round(conv_rate, 4),
-                "lift": round(conv_rate / base_rate, 2) if base_rate > 0 else 1.0,
-            })
+        m = ModelEvaluator.evaluate(joined["target"], joined["probability"])
+        expected = float((predictor.bundle.get("metrics") or {}).get("roc_auc", np.nan))
+        auc_drop = expected - m["roc_auc"]
+        degraded = bool(np.isfinite(auc_drop) and auc_drop > settings.REALIZED_AUC_DROP_ALERT)
+        top = joined[joined["decile"] == 10]
+        decile_10_rate = float(top["target"].mean()) if len(top) else float("nan")
 
-        # Quality status
-        if realized_auc >= 0.80 and realized_brier <= 0.16:
-            attribution_status = "EXCELLENT"
-        elif realized_auc >= 0.70:
-            attribution_status = "HEALTHY"
-        elif realized_auc >= 0.60:
-            attribution_status = "DEGRADED"
-        else:
-            attribution_status = "CRITICAL_DRIFT"
+        deciles = (joined.groupby("decile")
+                   .agg(count=("target", "size"), mean_predicted_prob=("probability", "mean"),
+                        actual_rate=("target", "mean"))
+                   .reset_index())
+        deciles["lift"] = deciles["actual_rate"] / m["base_rate"] if m["base_rate"] > 0 else np.nan
 
+        eval_id = f"FB_{target}_DAY_{cutoff}_{horizon}d_{start.strftime('%Y%m%d_%H%M%S_%f')}"
         result: Dict[str, Any] = {
             "eval_id": eval_id,
-            "cutoff_day": cutoff_day,
-            "horizon_days": horizon_days,
-            "evaluated_at": datetime.datetime.now().isoformat(),
-            "sample_size": len(joined),
-            "base_rate": round(base_rate, 4),
-            "realized_roc_auc": round(realized_auc, 4),
-            "realized_brier_score": round(realized_brier, 4),
-            "realized_log_loss": round(realized_logloss, 4),
-            "realized_top_decile_lift": round(realized_lift, 2),
-            "decile_10_actual_conversion": round(decile_10_rate, 4),
-            "attribution_status": attribution_status,
-            "decile_breakdown": decile_summary,
-            "duration_seconds": round((datetime.datetime.now() - start_time).total_seconds(), 2),
+            "target": target,
+            "cutoff_day": int(cutoff),
+            "horizon_days": int(horizon),
+            "evaluated_at": start.isoformat(timespec="seconds"),
+            "model_bundle": predictor.bundle_name,
+            "prediction_source": source,
+            "sample_size": int(len(joined)),
+            "base_rate": m["base_rate"],
+            "realized_roc_auc": m["roc_auc"],
+            "expected_roc_auc": round(expected, 6),
+            "auc_drop": round(float(auc_drop), 6),
+            "realized_brier_score": m["brier_score"],
+            "realized_log_loss": m["log_loss"],
+            "realized_ece": m["ece"],
+            "realized_top_decile_lift": m["lift_at_10pct"],
+            "decile_10_actual_rate": round(decile_10_rate, 4),
+            "degraded": degraded,
+            "attribution_status": "DEGRADED" if degraded else "HEALTHY",
+            "decile_breakdown": deciles.round(4).to_dict("records"),
         }
 
-        # 5. Persist to Lakehouse Gold
         con = self.lakehouse.get_connection()
         try:
-            con.execute("""
-                INSERT OR REPLACE INTO fct_model_attribution VALUES (
-                    ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?
-                );
-            """, [
-                eval_id,
-                cutoff_day,
-                horizon_days,
-                len(joined),
-                base_rate,
-                realized_auc,
-                realized_brier,
-                realized_logloss,
-                realized_lift,
-                decile_10_rate,
-                attribution_status,
-            ])
+            cols = list(ATTRIBUTION_COLUMNS)
+            row = [result[c] if c != "evaluated_at" else start for c in cols]
+            con.execute(f"INSERT INTO fct_model_attribution ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", row)
         finally:
             con.close()
 
-        # 6. Save JSON Report
-        report_file = self.output_dir / f"feedback_attribution_day_{cutoff_day}.json"
-        with open(report_file, "w") as f:
-            json.dump(result, f, indent=2)
+        report = self.output_dir / f"feedback_attribution_{target}_day_{cutoff}.json"
+        report.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+        self.state.publish(f"feedback_{target}", result)
+        log = logger.warning if degraded else logger.info
+        log(f"Feedback {target}@{cutoff} ({source}): realized AUC {m['roc_auc']:.4f} vs accepted {expected:.4f} "
+            f"(drop {auc_drop:+.4f}) -> {result['attribution_status']}")
+        return result
 
-        logger.info(
-            f"Ground-Truth Attribution complete: Realized AUC={realized_auc:.4f}, "
-            f"Brier={realized_brier:.4f}, Top Decile Lift={realized_lift:.2f}x ({attribution_status})"
-        )
+    def evaluate_fusion_rules(self, prediction_log: pd.DataFrame, horizon_days: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Compares each fusion rule's adjusted probability with the realized purchase rate of the
+        households it was applied to (anchored at the batch snapshot day of the answer).
+        Reports the coefficient the data implies, so the FUSION_* heuristics can be recalibrated.
+        """
+        if prediction_log.empty:
+            return {"evaluated": False, "reason": "empty prediction log"}
+        horizon = horizon_days or PropensityPredictor(expected_target="purchase").horizon_days
+        last_day = self.builder.last_observed_day()
+        log = prediction_log.dropna(subset=["batch_snapshot_day"]).copy()
+        log = log[log["batch_snapshot_day"] + horizon <= last_day]
+        if log.empty:
+            return {"evaluated": False, "reason": "no logged predictions with matured labels"}
+        log["rule"] = log["rules"].map(lambda r: r[0] if len(r) else "none")
+        log = log.sort_values("served_at").groupby(["household_key", "batch_snapshot_day"]).tail(1)
 
+        frames = []
+        for snapshot, grp in log.groupby("batch_snapshot_day"):
+            labels = self.builder.labels_at(int(snapshot), horizon)[["household_key", "target"]]
+            frames.append(grp.merge(labels, on="household_key", how="inner"))
+        joined = pd.concat(frames, ignore_index=True)
+
+        rules = {}
+        for rule, grp in joined.groupby("rule"):
+            realized, batch_p, unified_p = grp["target"].mean(), grp["batch_probability"].mean(), grp["unified_probability"].mean()
+            entry = {
+                "n": int(len(grp)),
+                "realized_rate": round(float(realized), 4),
+                "mean_batch_probability": round(float(batch_p), 4),
+                "mean_unified_probability": round(float(unified_p), 4),
+                "batch_abs_error": round(abs(float(batch_p - realized)), 4),
+                "unified_abs_error": round(abs(float(unified_p - realized)), 4),
+            }
+            entry["rule_improves_calibration"] = entry["unified_abs_error"] < entry["batch_abs_error"]
+            if rule == "intraday_purchase_dampening" and batch_p > 0:
+                entry["implied_dampening_factor"] = round(float(realized / batch_p), 4)
+            elif rule != "none":
+                entry["implied_additive_adjustment"] = round(float(realized - batch_p), 4)
+            rules[rule] = entry
+        result = {"evaluated": True, "horizon_days": int(horizon), "rows": int(len(joined)), "rules": rules}
+        self.state.publish("fusion_rules", result)
         return result

@@ -76,6 +76,60 @@ PROPENSITY_MODEL_ROUTING_TOTAL = Counter(
 )
 
 
+# Model quality & monitoring (refreshed from MonitoringState when /metrics is scraped)
+PROPENSITY_REALIZED_AUC = Gauge(
+    "propensity_realized_roc_auc", "Realized out-of-time ROC-AUC from the latest ground-truth feedback", ["target"])
+PROPENSITY_EXPECTED_AUC = Gauge(
+    "propensity_expected_roc_auc", "ROC-AUC the active champion was accepted with (OOT test)", ["target"])
+PROPENSITY_REALIZED_AUC_DROP = Gauge(
+    "propensity_realized_auc_drop", "Expected minus realized ROC-AUC (positive = degradation)", ["target"])
+PROPENSITY_FEEDBACK_CUTOFF_DAY = Gauge(
+    "propensity_feedback_cutoff_day", "Cutoff DAY of the latest ground-truth evaluation", ["target"])
+PROPENSITY_DRIFT_STATUS = Gauge(
+    "propensity_drift_status", "Latest drift audit status (0 = stable, 1 = warning, 2 = critical)", ["target"])
+PROPENSITY_DRIFT_RATIO = Gauge(
+    "propensity_drift_ratio", "Share of features in significant drift in the latest audit", ["target"])
+PROPENSITY_PREDICTION_DRIFT_PSI = Gauge(
+    "propensity_prediction_drift_psi", "PSI of the scored probability distribution vs the champion reference",
+    ["target"])
+PROPENSITY_BATCH_VIEW_HOUSEHOLDS = Gauge(
+    "propensity_batch_view_households", "Households with a published batch view", ["variant"])
+PROPENSITY_BATCH_SNAPSHOT_DAY = Gauge(
+    "propensity_batch_snapshot_day", "Snapshot DAY of the served champion batch view")
+
+PROPENSITY_CONSUMER_LAG = Gauge(
+    "propensity_speed_consumer_lag", "Kafka consumer lag (messages) on the intraday events topic")
+PROPENSITY_CONSUMED_EVENTS_TOTAL = Counter(
+    "propensity_speed_consumed_events_total", "Events applied by the Kafka consumer worker", ["outcome"])
+
+DRIFT_STATUS_CODES = {"STABLE": 0, "WARNING": 1, "CRITICAL_DRIFT": 2}
+
+
+def refresh_monitoring_gauges(state, batch_store=None) -> None:
+    """Copies the latest cross-process monitoring reports into Prometheus gauges."""
+    for target in ("purchase", "lapse"):
+        fb = state.latest(f"feedback_{target}")
+        if fb:
+            PROPENSITY_REALIZED_AUC.labels(target=target).set(fb["realized_roc_auc"])
+            PROPENSITY_EXPECTED_AUC.labels(target=target).set(fb["expected_roc_auc"])
+            PROPENSITY_REALIZED_AUC_DROP.labels(target=target).set(fb["auc_drop"])
+            PROPENSITY_FEEDBACK_CUTOFF_DAY.labels(target=target).set(fb["cutoff_day"])
+        drift = state.latest(f"drift_{target}")
+        if drift:
+            PROPENSITY_DRIFT_STATUS.labels(target=target).set(DRIFT_STATUS_CODES.get(drift["overall_status"], 0))
+            PROPENSITY_DRIFT_RATIO.labels(target=target).set(drift["feature_drift_summary"]["drift_ratio"])
+            if drift.get("prediction_drift"):
+                PROPENSITY_PREDICTION_DRIFT_PSI.labels(target=target).set(drift["prediction_drift"]["psi"])
+            if target == "purchase":
+                record_drift_metrics({f: d["psi"] for f, d in drift.get("feature_details", {}).items()})
+    if batch_store is not None:
+        for variant in ("champion", "challenger"):
+            PROPENSITY_BATCH_VIEW_HOUSEHOLDS.labels(variant=variant).set(batch_store.count(variant))
+        meta = batch_store.metadata("champion") or {}
+        if meta.get("snapshot_day") is not None:
+            PROPENSITY_BATCH_SNAPSHOT_DAY.set(meta["snapshot_day"])
+
+
 def record_model_routing(variant: str) -> None:
     """Records routing to champion or challenger."""
     PROPENSITY_MODEL_ROUTING_TOTAL.labels(variant=variant).inc()

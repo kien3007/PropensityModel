@@ -1,0 +1,87 @@
+# promtool unit tests for alert_rules.yml:
+#   docker run --rm -v "$PWD/docker/prometheus:/r" --entrypoint promtool prom/prometheus:v2.51.0 \
+#     test rules /r/alert_rules_test.yml
+rule_files:
+  - alert_rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Simulated drift: PSI crosses 0.20, then the audit turns CRITICAL.
+  - interval: 1m
+    input_series:
+      - series: 'propensity_feature_drift_psi{feature_name="spend_90d"}'
+        values: "0.02 0.05 0.31 0.31"
+      - series: 'propensity_drift_status{target="purchase"}'
+        values: "0 0 2 2"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PropensityFeatureDriftHigh
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: PropensityFeatureDriftHigh
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Feature drift PSI 0.31 above 0.20"
+              description: >-
+                At least one champion feature drifted versus the champion's out-of-time reference window.
+                Check data/outputs/reports/drift_purchase_latest.json.
+      - eval_time: 2m
+        alertname: PropensityDriftCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, target: purchase}
+            exp_annotations:
+              summary: "Drift audit CRITICAL for target purchase"
+              description: "The scheduler starts an out-of-cycle retraining (AUTO_RETRAIN_ON_DEGRADATION)."
+
+  # Realized AUC degradation from ground-truth feedback.
+  - interval: 1m
+    input_series:
+      - series: 'propensity_realized_auc_drop{target="lapse"}'
+        values: "0.004 0.08"
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: PropensityRealizedAucDrop
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: PropensityRealizedAucDrop
+        exp_alerts:
+          - exp_labels: {severity: critical, target: lapse}
+            exp_annotations:
+              summary: "Realized AUC dropped 0.080 below the accepted AUC (lapse)"
+              description: "Ground-truth feedback shows degradation; a retraining candidate is triggered."
+
+  # No batch scores for 10 minutes -> cold-start everywhere.
+  - interval: 1m
+    input_series:
+      - series: 'propensity_batch_view_households{variant="champion"}'
+        values: "0x12"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PropensityNoBatchView
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: PropensityNoBatchView
+        exp_alerts:
+          - exp_labels: {severity: critical, variant: champion}
+            exp_annotations:
+              summary: "Serving has no champion batch scores: every answer is cold start"
+              description: "Run the batch pipeline or check its Redis publication."
+
+  # Consumer lag above 1000 for 5 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'propensity_speed_consumer_lag'
+        values: "5000x10"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PropensityKafkaConsumerLagHigh
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PropensityKafkaConsumerLagHigh
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Speed-layer consumer is 5000 events behind"
+              description: "Intraday deltas are stale; fusion rules act on old information."

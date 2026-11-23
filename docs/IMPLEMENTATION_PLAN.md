@@ -1,6 +1,6 @@
 # Kế hoạch hoàn thiện PropensityVSF
 
-> Ngày lập: 2026-11-23 · Trạng thái: Phase 0–4 đã hoàn thành (2026-11-23); Phase 5–7 chưa làm
+> Ngày lập: 2026-11-23 · Trạng thái: Phase 0–5 đã hoàn thành (2026-11-23); Phase 6–7 chưa làm
 
 ## Bối cảnh
 
@@ -104,6 +104,28 @@ Chi tiết và số liệu đầy đủ nằm ở [analysis/TARGET_ANALYSIS.md](
   - Có test cho 401, 503, 429, cold-start, idempotency và Redis store (dùng `fakeredis`).
   - Load test `python -m scripts.load_test` (1 worker, backend memory, client chạy cùng máy): p99 của predict là **47.3 ms** ở 16 request đồng thời và 31.9 ms ở 4, đạt mục tiêu < 50 ms nhưng sát ngưỡng ở 16. Ở production nên chạy nhiều worker.
 - **Chưa làm:** rate limit hiện chỉ áp dụng trong từng tiến trình, chưa chia sẻ giữa các replica (việc này thuộc về gateway). Docker compose chưa được chạy thử end-to-end (Phase 6).
+
+### Phase 5: đã xong
+- **Bốn lỗi gốc đã sửa.**
+  1. Drift trước đây được so với snapshot Gold của *chính ngày đang chấm điểm*, nên luôn ra `STABLE`.
+  2. Batch ghi gauge trong tiến trình riêng nên Prometheus không bao giờ thấy.
+  3. Feedback loop đọc thẳng CSV, tính nhãn theo từng dòng giao dịch (khác định nghĩa lúc train), và scheduler gọi với horizon 7 ngày trong khi champion dự đoán 14 ngày.
+  4. Job feedback của scheduler gọi `run_weekly_feedback`, một hàm không tồn tại.
+  - Ngoài ra `build_gold_layer()` bị crash khi chưa có bảng demographics.
+- **Drift (5.1)** được so với cửa sổ test out-of-time của champion ([reference.py](../src/monitoring/reference.py)). Ở cutoff 711: `STABLE`, PSI lớn nhất 0.02, PSI của phân phối dự đoán 0.003.
+- **Feedback (5.2)** ([feedback_loop.py](../src/monitoring/feedback_loop.py)):
+  - Dùng cùng DataLoader và cùng định nghĩa nhãn như lúc train; horizon lấy từ champion.
+  - Lấy dự đoán từ bảng Gold, nếu không có thì chấm lại (replay).
+  - So AUC thực tế với AUC lúc champion được chấp nhận. Kết quả thật: purchase ở cutoff 697 đạt 0.857 so với 0.859; lapse ở cutoff 690 đạt 0.812 so với 0.816. Cả hai đều `HEALTHY`.
+  - Chính sách retrain ([retraining_policy.py](../src/monitoring/retraining_policy.py)) tự kích hoạt retrain khi drift ở mức CRITICAL hoặc AUC giảm quá 0.05. Việc promote vẫn phải qua gate.
+- **Cảnh báo (5.3):**
+  - 7 luật trong `docker/prometheus/alert_rules.yml`; Alertmanager đã có trong compose.
+  - Metric lag của Kafka consumer, có exporter riêng ở cổng 9101.
+  - Dashboard Grafana thêm 8 panel về chất lượng model.
+  - `promtool check` và `promtool test rules` đều pass, và đã được đưa vào CI.
+- **Hiệu quả fusion (5.4):** API ghi log các dự đoán đã trả về (Redis stream). Job feedback so từng luật với tỷ lệ mua thực tế và đưa ra hệ số mà dữ liệu gợi ý.
+- **Nghiệm thu:** test `test_simulated_drift_is_critical_and_retrains` mô phỏng drift (chi tiêu ×6, mất 2/3 basket); kết quả là drift `CRITICAL_DRIFT` và scheduler kích hoạt retrain. Unit test bằng promtool xác nhận các cảnh báo bật đúng lúc.
+- **Giới hạn:** Dunnhumby không có sự kiện intraday thật, nên việc đánh giá luật fusion mới chỉ được kiểm chứng bằng dữ liệu giả lập, chưa hiệu chỉnh được hệ số thật.
 
 ### Phát hiện mới (đầu vào cho Phase 3)
 - Gate cũ **không thể đạt**: lift@10% tối đa của tập test là 1.426, trong khi ngưỡng là 1.50. Đã sửa ở Phase 2.

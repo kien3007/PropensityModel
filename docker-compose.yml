@@ -189,13 +189,30 @@ services:
     restart: unless-stopped
     ports:
       - "9090:9090"
+    depends_on:
+      - alertmanager
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
+
+  # ============================================================================
+  # 7b. Alert routing: Alertmanager (Port 9093)
+  # ============================================================================
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: propensity_alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./docker/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
 
   # ============================================================================
   # 8. Observability Dashboard: Grafana (Port 3000)
@@ -261,6 +278,9 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - CONSUMER_METRICS_PORT=9101
+    expose:
+      - "9101"
 
 volumes:
   postgres_data:
