@@ -1,6 +1,6 @@
 # Kế hoạch hoàn thiện PropensityVSF
 
-> Ngày lập: 2026-11-23 · Trạng thái: Phase 0–5 đã hoàn thành (2026-11-23); Phase 6–7 chưa làm
+> Ngày lập: 2026-11-23 · Trạng thái: **Phase 0–7 đã hoàn thành** (2026-11-23)
 
 ## Bối cảnh
 
@@ -126,6 +126,30 @@ Chi tiết và số liệu đầy đủ nằm ở [analysis/TARGET_ANALYSIS.md](
 - **Hiệu quả fusion (5.4):** API ghi log các dự đoán đã trả về (Redis stream). Job feedback so từng luật với tỷ lệ mua thực tế và đưa ra hệ số mà dữ liệu gợi ý.
 - **Nghiệm thu:** test `test_simulated_drift_is_critical_and_retrains` mô phỏng drift (chi tiêu ×6, mất 2/3 basket); kết quả là drift `CRITICAL_DRIFT` và scheduler kích hoạt retrain. Unit test bằng promtool xác nhận các cảnh báo bật đúng lúc.
 - **Giới hạn:** Dunnhumby không có sự kiện intraday thật, nên việc đánh giá luật fusion mới chỉ được kiểm chứng bằng dữ liệu giả lập, chưa hiệu chỉnh được hệ số thật.
+
+### Phase 6: đã xong
+- **Docker stack trước đây không chạy được.**
+  - Dockerfile chạy `pip install .` khi chưa có `src/`, và `.dockerignore` loại luôn `README.md` mà pyproject cần.
+  - `COPY sample_data/` copy một symlink trỏ ra ngoài build context.
+  - Serving dùng file model đóng sẵn trong image, trong khi scheduler lại mount `./models` của host. Hot-reload không thấy champion mới, và container ghi đè lên file model đang được git track.
+  - Mật khẩu viết thẳng trong compose; Kafka không có healthcheck.
+  - Image MinIO cộng đồng không còn tải được.
+- **Compose viết lại (6.2, 6.3).**
+  - Mọi service đều có healthcheck và `depends_on: service_healthy`.
+  - Secret bắt buộc lấy từ `.env` (`${VAR:?}`); thiếu là compose từ chối chạy.
+  - Registry, lakehouse và outputs nằm trong named volume; dữ liệu thô mount chỉ-đọc.
+  - Batch và scheduler dùng chung Redis với serving.
+  - MinIO và Postgres (không được code dùng) chuyển sang profile `storage`.
+- **Smoke test end-to-end (6.1)** bằng `python -m scripts.e2e_smoke` (hoặc `make e2e`), chạy trong project compose cô lập:
+  - Kiểm tra: build, services healthy, batch, train, feedback, `/ready` lấy từ Redis, predict, sự kiện qua Kafka làm đổi điểm, xác thực 401, `/metrics`, Prometheus scrape, 7 luật cảnh báo, Alertmanager.
+  - Kết quả: **14/14 PASS với dữ liệu thật** (315s, đã gồm build); **13/13 PASS với dữ liệu tổng hợp** (60s).
+  - CI chạy hằng đêm với dữ liệu tổng hợp (`.github/workflows/e2e.yml`).
+- **6.4:** không có file `__pycache__`, `.duckdb` hay `.db` nào bị git track.
+
+### Phase 7: đã xong
+- Viết mới [MODEL_CARD.md](MODEL_CARD.md) (2 target, dữ liệu, metric, baseline, gate, cách dùng đúng, giới hạn) và [RUNBOOK.md](RUNBOOK.md) (job, retrain / promote / rollback, xử lý từng cảnh báo, xoay vòng key, sao lưu).
+- README viết lại theo đúng trạng thái hiện tại: kiến trúc, cấu trúc thư mục, quick start bằng Docker, lịch job, test, giới hạn. Các link `file:///` đã được thay bằng link tương đối.
+- Tài liệu kiến trúc được ghi chú rõ là "thiết kế mục tiêu", và thông số model đã được cập nhật.
 
 ### Phát hiện mới (đầu vào cho Phase 3)
 - Gate cũ **không thể đạt**: lift@10% tối đa của tập test là 1.426, trong khi ngưỡng là 1.50. Đã sửa ở Phase 2.

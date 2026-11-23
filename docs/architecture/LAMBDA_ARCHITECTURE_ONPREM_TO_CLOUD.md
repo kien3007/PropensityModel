@@ -1,4 +1,6 @@
 # ⚡ KIẾN TRÚC LAMBDA CHO HỆ THỐNG ML DỰ ĐOÁN XÁC SUẤT MUA HÀNG
+
+> **Lưu ý (2026-11-23):** đây là tài liệu *thiết kế mục tiêu* (gồm Flink/Beam, dbt, MinIO). Phần đang chạy thật trong repo được mô tả ở [README](../../README.md) và [RUNBOOK](../RUNBOOK.md): speed layer dùng Kafka consumer + Redis, lakehouse là DuckDB với lớp Bronze ingest từ CSV, không dùng MinIO/Postgres.
 ### Enterprise Lambda Architecture for Household Purchase Propensity Platform
 **Chiến Lược: Xây Dựng On-Premise Trước $\to$ Di Chuyển Mượt Mà Lên Cloud (Zero-Downtime Migration)**
 *Bộ Dữ Liệu Thực Nghiệm: Dunnhumby - The Complete Journey (2.595.732 giao dịch, 2.500 hộ gia đình, 711 ngày, 8 bảng)*
@@ -44,7 +46,7 @@ flowchart TB
         MASTER_DS[("Master Dataset (Immutable Log)\nOn-Prem: MinIO Parquet (S3 API)\nCloud: GCS / AWS S3")]
         DW["Data Warehouse (dbt Transformations)\nOn-Prem: DuckDB + dbt-duckdb\nCloud: Google BigQuery / Snowflake"]
         FS_OFFLINE["Feast Offline Feature Store\n(Strict Point-in-Time DAY <= t_0)"]
-        TRAINER["Model Training & Tuning Pipeline\n(LightGBM GBDT + Platt Calibration)"]
+        TRAINER["Model Training & Tuning Pipeline\n(LightGBM GBDT + calibration chọn theo ECE)"]
         BATCH_SCORES[("Precomputed Batch Views\nP_batch(Y=1) for 2,500 HH\nDeciles 1-10 & Urgency Baseline")]
 
         CDC -- "Append-Only Raw Events" --> MASTER_DS
@@ -100,10 +102,10 @@ flowchart TB
   - Nhánh 2 (Speed): Đẩy sự kiện tức thời vào topic Kafka phục vụ stream processing.
 
 ### 3.2. Batch Layer (Tầng Lô - Master Dataset & Xử Lý Sâu)
-- **Master Dataset**: MinIO S3 Object Store lưu trữ toàn bộ lịch sử bất biến dạng Parquet (`bronze/`).
+- **Master Dataset**: CSV thô mount chỉ-đọc, được ingest thành Parquet lớp Bronze (DuckDB Lakehouse). *(Thiết kế mục tiêu: MinIO / S3 object store.)*
 - **Data Warehouse & Transformations**: DuckDB xử lý dữ liệu phân tích cực nhanh, tổ chức mô hình dbt 3 tầng (`staging`, `intermediate`, `marts`).
-- **Feature Store Offline**: Kỷ luật Point-In-Time tuyệt đối ($DAY \le t_0$, Zero Future Leakage), trích xuất 23 đặc trưng chuẩn (18 biến hành vi + 5 biến chu kỳ cadence).
-- **Mô Hình Champion**: LightGBM GBDT với Platt Scaling calibration (Brier score = 0.1364, PR-AUC = 0.9303, Decile Lift = 1.78x).
+- **Feature Store Offline**: Kỷ luật Point-In-Time tuyệt đối ($DAY \le t_0$, Zero Future Leakage), trích xuất 28 đặc trưng multi-domain theo feature contract `multidomain_v1`.
+- **Mô Hình Champion**: LightGBM với Isotonic calibration, hai target: `purchase` 14 ngày (OOT AUC 0,859) và `lapse` 21 ngày (OOT AUC 0,816). Xem [MODEL_CARD.md](../MODEL_CARD.md).
 
 ### 3.3. Speed Layer (Tầng Tốc Độ / Stream Processing)
 - **Engine**: Apache Flink / Beam streaming processor.
