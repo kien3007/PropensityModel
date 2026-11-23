@@ -22,7 +22,8 @@ from src.features.targets import LAPSE
 from src.lakehouse.engine import LakehouseEngine
 from src.models.predictor import PropensityPredictor
 from src.monitoring.drift_detector import DataDriftDetector
-from src.monitoring.metrics import record_drift_metrics
+from src.monitoring.reference import build_champion_reference
+from src.monitoring.state import MonitoringState
 from src.speed_layer.delta_stream import SpeedLayerProcessor
 from src.serving.batch_store import BatchScoreStore
 from src.training.model_registry import registry_dir_for
@@ -40,6 +41,7 @@ def run_batch_pipeline(
     lapse_model_path: Optional[Path | str] = None,
     challenger_model_path: Optional[Path | str] = None,
     batch_store: Optional[BatchScoreStore] = None,
+    monitoring_state: Optional[MonitoringState] = None,
 ) -> Dict[str, Any]:
     """
     Executes the End-to-End Batch Layer Pipeline.
@@ -66,7 +68,8 @@ def run_batch_pipeline(
         )
     data = data or DataLoader.from_lakehouse(lakehouse, ingest=False)
     logger.info(f"Extracting Point-in-Time features up to DAY={cutoff_day} from {data.source}...")
-    snapshot = MultiDomainFeatureBuilder(data).features_at(cutoff_day)
+    builder = MultiDomainFeatureBuilder(data)
+    snapshot = builder.features_at(cutoff_day)
 
     # 3. Model Inference & Business Tiering
     logger.info(f"Scoring {len(snapshot):,} households with Champion model '{predictor.bundle_name}'...")
@@ -106,29 +109,34 @@ def run_batch_pipeline(
                               "mean_propensity": float(challenger_scores["purchase_probability"].mean())}
     scores_df[crm_cols].to_csv(crm_csv_path, index=False)
 
-    # 6. Evaluate Model & Data Drift against Gold Baseline
+    # 6. Drift audit against the champion's own out-of-time reference window (not against
+    #    a snapshot of the same day, which would always look stable)
     drift_summary = None
-    gold_snapshot_file = settings.BASE_DIR / "data" / "lakehouse" / "gold" / "fct_household_features_snapshot.parquet"
-    if gold_snapshot_file.exists():
-        try:
-            ref_snapshot = pd.read_parquet(gold_snapshot_file)
-            detector = DataDriftDetector(output_dir=out_dir / "reports")
-            drift_report = detector.generate_full_drift_audit(
-                reference_df=ref_snapshot,
-                current_df=snapshot,
-                current_scores=scores_df["purchase_probability"].to_numpy(),
-                run_id=f"DRIFT_{run_id}",
-            )
-            psi_dict = {f: details["psi"] for f, details in drift_report["feature_details"].items()}
-            record_drift_metrics(psi_dict)
-            drift_summary = {
-                "status": drift_report["overall_status"],
-                "drift_ratio": drift_report["feature_drift_summary"]["drift_ratio"],
-                "requires_retraining": drift_report["requires_retraining"],
-            }
-            logger.info(f"Drift Audit: {drift_summary['status']} (Requires Retrain={drift_summary['requires_retraining']})")
-        except Exception as e:
-            logger.warning(f"Drift Audit could not complete: {e}")
+    try:
+        reference = build_champion_reference(predictor, builder)
+        detector = DataDriftDetector(output_dir=out_dir / "reports")
+        drift_report = detector.generate_full_drift_audit(
+            reference_df=reference.features,
+            current_df=snapshot,
+            reference_scores=reference.scores,
+            current_scores=scores_df["purchase_probability"].to_numpy(),
+            run_id=f"DRIFT_{run_id}",
+            target="purchase",
+            reference_cutoffs=reference.cutoffs,
+            current_cutoff=cutoff_day,
+        )
+        (monitoring_state or MonitoringState(report_dir=out_dir / "reports")).publish("drift_purchase", drift_report)
+        drift_summary = {
+            "status": drift_report["overall_status"],
+            "drift_ratio": drift_report["feature_drift_summary"]["drift_ratio"],
+            "prediction_psi": (drift_report["prediction_drift"] or {}).get("psi"),
+            "reference_cutoffs": reference.cutoffs,
+            "requires_retraining": drift_report["requires_retraining"],
+        }
+        logger.info(f"Drift Audit vs reference {reference.cutoffs}: {drift_summary['status']} "
+                    f"(Requires Retrain={drift_summary['requires_retraining']})")
+    except Exception as e:
+        logger.warning(f"Drift Audit could not complete: {e}")
 
     # 7. Reset Speed Layer Intraday Deltas for fresh cycle
     # 6b. Second model: lapse risk of regular shoppers (skipped if no lapse champion is registered)

@@ -236,7 +236,23 @@ docker compose up -d scheduler
 Production-ready Airflow DAGs located in `dags/` featuring automatic retry policies, XCom parameter passing, and cross-platform fallbacks:
 - `dags/dag_weekly_batch_propensity.py`: Orchestrates weekly batch scoring, Lakehouse sync, and marketing segment materialization.
 - `dags/dag_monthly_model_retraining.py`: Orchestrates model retraining, governance verification, and calls `POST /v1/models/reload` on the FastAPI Serving Gateway for **zero-downtime hot-reloading** of the model bundle in memory.
-- `dags/dag_ground_truth_feedback_loop.py`: Orchestrates prospective accuracy evaluation, attribution metric computation, and Gold Lakehouse update.
+- `dags/dag_ground_truth_feedback_loop.py`: Evaluates every target's champion on its latest matured cutoff, and retrains when the realized AUC degraded.
+
+### Monitoring loop
+
+| Signal | Produced by | Reference | Action |
+|---|---|---|---|
+| Feature and prediction drift (PSI / KS) | Batch pipeline, every run | The champion's own out-of-time test window (bundle `test_cutoffs`) | CRITICAL starts an out-of-cycle retraining |
+| Realized AUC | Feedback job, latest cutoff with matured labels | The AUC the champion was accepted with | Drop > `REALIZED_AUC_DROP_ALERT` (0.05) starts a retraining |
+| Fusion-rule calibration | Feedback job, from the API's served-prediction log | Realized purchase rate | Reports the dampening / boost values implied by the data |
+
+- **Retraining:** a triggered retraining only produces a *candidate*. Promotion still goes through the governance gate. Set `AUTO_RETRAIN_ON_DEGRADATION=false` to only alert.
+- **Getting reports to Prometheus:** the batch and feedback jobs run in their own processes. They publish their reports to `MonitoringState` (Redis, plus a JSON file), and the serving API turns them into gauges on every `/metrics` scrape.
+- **Alerts:** defined in `docker/prometheus/alert_rules.yml` (drift, realized AUC drop, p99 latency, missing batch view, serving down, Kafka consumer lag) and routed by Alertmanager (`docker/alertmanager.yml`, port 9093). The rules are unit-tested with `promtool test rules docker/prometheus/alert_rules_test.yml` in CI.
+
+```bash
+python -m src.scheduler.daemon --run-job feedback   # realized AUC for purchase + lapse, retrain if degraded
+```
 
 ---
 

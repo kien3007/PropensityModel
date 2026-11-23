@@ -52,24 +52,21 @@ default_args = {
 }
 
 
-def task_evaluate_ground_truth_attribution(cutoff_day: int = 690, horizon_days: int = 14, **kwargs) -> Dict[str, Any]:
-    """Runs automated ground-truth join and attribution analysis."""
-    from src.monitoring.feedback_loop import GroundTruthFeedbackLoop
+def task_evaluate_ground_truth_attribution(**kwargs) -> Dict[str, Any]:
+    """
+    Evaluates every target's champion on its latest matured cutoff (horizon from the bundle)
+    and retrains when realized AUC dropped more than REALIZED_AUC_DROP_ALERT below the
+    accepted AUC. Promotion of the retrained candidate still goes through the governance gate.
+    """
+    from src.scheduler.daemon import MLSystemScheduler
 
-    logger.info(f"Running Ground-Truth Feedback Attribution for Cutoff Day {cutoff_day}...")
-    loop = GroundTruthFeedbackLoop()
-    result = loop.evaluate_realized_performance(cutoff_day=cutoff_day, horizon_days=horizon_days)
-
-    logger.info(
-        f"Attribution Result: Status={result['attribution_status']} | "
-        f"Realized AUC={result['realized_roc_auc']:.4f} | "
-        f"Realized Lift={result['realized_top_decile_lift']:.2f}x"
-    )
-
-    if result["attribution_status"] == "CRITICAL_DRIFT":
-        raise ValueError(f"CRITICAL: Realized AUC dropped to {result['realized_roc_auc']:.4f}. Retraining urgent!")
-
-    return result
+    reports = MLSystemScheduler().job_ground_truth_feedback()
+    for target, r in reports.items():
+        if target in ("purchase", "lapse"):
+            logger.info(f"[{target}] realized AUC {r['realized_roc_auc']:.4f} vs accepted {r['expected_roc_auc']:.4f} "
+                        f"-> {r['attribution_status']}")
+    logger.info(f"Retraining decision: {reports['retraining_decision']}")
+    return reports
 
 
 with DAG(
@@ -86,5 +83,4 @@ with DAG(
     attribution_task = PythonOperator(
         task_id="evaluate_realized_accuracy",
         python_callable=task_evaluate_ground_truth_attribution,
-        op_kwargs={"cutoff_day": 690, "horizon_days": 14},
     )

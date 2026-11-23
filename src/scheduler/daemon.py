@@ -19,6 +19,8 @@ from typing import Any, Callable, Dict, List, Optional
 from src.config.settings import settings
 from src.lakehouse.engine import LakehouseEngine
 from src.monitoring.feedback_loop import GroundTruthFeedbackLoop
+from src.monitoring.retraining_policy import decide_retraining
+from src.monitoring.state import MonitoringState
 from src.pipelines.batch_pipeline import run_batch_pipeline
 from src.config.model_config import TRAINING_CONFIGS
 from src.pipelines.train_pipeline import run_training_pipeline
@@ -166,29 +168,42 @@ class MLSystemScheduler:
 
     # --- Job Implementations ---
     def job_weekly_batch(self) -> Dict[str, Any]:
-        """Runs batch scoring for latest cutoff day, saves to Lakehouse and updates artifacts."""
+        """Scores the latest cutoff; a CRITICAL drift audit triggers an out-of-cycle retraining."""
         logger.info("Executing Weekly Batch Scoring Pipeline...")
         summary = run_batch_pipeline(cutoff_day=711)
         logger.info(
             f"Batch Scoring completed. Households: {summary['total_households_scored']}, "
             f"Mean Propensity: {summary['mean_propensity']:.4f}, Duration: {summary['duration_seconds']}s"
         )
+        drift = MonitoringState().latest("drift_purchase")
+        summary["retraining_decision"] = self._maybe_retrain(decide_retraining(drift_report=drift))
         return summary
 
-    def job_monthly_retraining(self) -> Dict[str, Any]:
-        """Runs retraining pipeline, checks governance gates, and triggers zero-downtime hot-reload."""
-        logger.info("Executing Monthly Model Retraining Pipeline...")
+    def job_monthly_retraining(self, reasons: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Retrains both targets (gate decides promotion) and hot-reloads serving if purchase was promoted."""
+        logger.info(f"Executing Model Retraining Pipeline (reasons: {reasons or ['monthly schedule']})...")
         # Target, splits and hyper-parameters come from src/config/model_config.py.
         summary = run_training_pipeline(config=TRAINING_CONFIGS["purchase"])
         lapse = run_training_pipeline(config=TRAINING_CONFIGS["lapse"])
         logger.info(f"Lapse model retrained (promoted={lapse['promoted']}).")
         summary["lapse"] = {k: lapse[k] for k in ("bundle_name", "promoted", "test_metrics")}
+        summary["trigger_reasons"] = reasons or ["monthly schedule"]
 
         if summary.get("promoted"):
             logger.info("Model promoted. Triggering Serving Gateway hot-reload via REST API...")
             self.trigger_serving_hot_reload()
 
         return summary
+
+    def _maybe_retrain(self, decision: Dict[str, Any]) -> Dict[str, Any]:
+        if decision["retrain"]:
+            logger.warning(f"Monitoring triggered retraining: {decision['reasons']}")
+            result = self.job_monthly_retraining(reasons=decision["reasons"])
+            decision["retraining_promoted"] = {"purchase": result.get("promoted"),
+                                               "lapse": result["lapse"]["promoted"]}
+        elif decision["reasons"]:
+            logger.warning(f"Degradation detected but AUTO_RETRAIN_ON_DEGRADATION is off: {decision['reasons']}")
+        return decision
 
     def job_daily_data_quality(self) -> Dict[str, Any]:
         """Runs Lakehouse assertions and data quality validation."""
@@ -202,15 +217,28 @@ class MLSystemScheduler:
         return dq
 
     def job_ground_truth_feedback(self) -> Dict[str, Any]:
-        """Runs prospective realized accuracy attribution joining past predictions to actuals."""
-        logger.info("Executing Weekly Ground-Truth Feedback Attribution Job...")
+        """
+        Evaluates every target's champion on the latest cutoff whose labels have matured
+        (last observed DAY - horizon) and retrains if realized AUC degraded.
+        """
+        logger.info("Executing Ground-Truth Feedback Attribution Job...")
         loop = GroundTruthFeedbackLoop()
-        summary = loop.run_weekly_feedback(cutoff_day=704, horizon_days=7)
-        logger.info(
-            f"Ground-Truth Feedback completed. ROC-AUC: {summary.get('realized_roc_auc', 0):.4f}, "
-            f"Top Decile Lift: {summary.get('top_decile_lift', 0):.2f}x"
+        reports: Dict[str, Any] = {}
+        for target in TRAINING_CONFIGS:
+            try:
+                reports[target] = loop.evaluate_realized_performance(target=target)
+            except (FileNotFoundError, ValueError) as e:
+                logger.warning(f"Feedback for target '{target}' skipped: {e}")
+        try:  # fusion heuristics vs realized outcomes, from the API's served-prediction log
+            from src.monitoring.prediction_log import PredictionLog
+
+            reports["fusion_rules"] = loop.evaluate_fusion_rules(PredictionLog().to_frame())
+        except Exception as e:
+            logger.warning(f"Fusion-rule evaluation skipped: {e}")
+        reports["retraining_decision"] = self._maybe_retrain(
+            decide_retraining(feedback_reports=[r for k, r in reports.items() if k in TRAINING_CONFIGS])
         )
-        return summary
+        return reports
 
     def trigger_serving_hot_reload(self) -> bool:
         """Sends HTTP POST /v1/models/reload to Serving Gateway."""

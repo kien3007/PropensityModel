@@ -89,7 +89,7 @@ def test_full_drift_audit_report(tmp_path):
     assert report["overall_status"] in ["WARNING", "CRITICAL_DRIFT"]
     assert report["requires_retraining"] is True
     assert (tmp_path / "drift_report_TEST_RUN_01.json").exists()
-    assert (tmp_path / "drift_report_latest.json").exists()
+    assert (tmp_path / "drift_report_purchase_latest_full.json").exists()
 
 
 def test_prometheus_metrics_and_endpoint():

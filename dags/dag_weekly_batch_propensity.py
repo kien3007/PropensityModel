@@ -70,8 +70,18 @@ def task_execute_batch_scoring(cutoff_day: int = 711, **kwargs) -> Dict[str, Any
     """Executes the enterprise weekly batch scoring pipeline."""
     from src.pipelines.batch_pipeline import run_batch_pipeline
 
+    from src.monitoring.retraining_policy import decide_retraining
+    from src.monitoring.state import MonitoringState
+
     logger.info(f"Executing Batch Scoring Pipeline for Cutoff Day {cutoff_day}...")
     summary = run_batch_pipeline(cutoff_day=cutoff_day)
+    decision = decide_retraining(drift_report=MonitoringState().latest("drift_purchase"))
+    if decision["retrain"]:
+        from src.scheduler.daemon import MLSystemScheduler
+
+        logger.warning(f"Drift triggered retraining: {decision['reasons']}")
+        MLSystemScheduler().job_monthly_retraining(reasons=decision["reasons"])
+    summary["retraining_decision"] = decision
     logger.info(
         f"Batch Scoring Complete: {summary['total_households_scored']} households scored. "
         f"Mean Propensity: {summary['mean_propensity']:.4f}."

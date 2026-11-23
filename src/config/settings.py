@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     FUSION_APP_NUDGE: float = 0.05             # add after repeated app interactions
     FUSION_APP_MIN_INTERACTIONS: int = 2
 
+    # Monitoring & automated retraining triggers.
+    DRIFT_PSI_ALERT: float = 0.20          # Prometheus early-warning threshold per feature
+    REALIZED_AUC_DROP_ALERT: float = 0.05  # expected (test) AUC - realized AUC that counts as degraded
+    AUTO_RETRAIN_ON_DEGRADATION: bool = True
+    PREDICTION_LOG_MAXLEN: int = 100_000   # served predictions kept for fusion-rule evaluation
+    CONSUMER_METRICS_PORT: int = 9101      # Prometheus exporter of the Kafka consumer worker
+
     # Streaming Event Bus (Kafka)
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
     KAFKA_TOPIC_EVENTS: str = "pos-intraday-events"

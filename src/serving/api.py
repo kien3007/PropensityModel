@@ -24,8 +24,11 @@ from src.monitoring.metrics import (
     record_model_routing,
     record_prediction,
     record_speed_event,
+    refresh_monitoring_gauges,
     update_model_info_gauge,
 )
+from src.monitoring.prediction_log import PredictionLog
+from src.monitoring.state import MonitoringState
 from src.serving.fusion_engine import LambdaFusionEngine
 from src.serving.security import rate_limit, require_api_key
 from src.speed_layer.kafka_bus import KafkaEventProducer
@@ -42,6 +45,8 @@ app = FastAPI(
 fusion_engine = LambdaFusionEngine()
 kafka_producer = KafkaEventProducer(fallback_processor=fusion_engine.speed_processor)
 fusion_engine.batch_store.bootstrap_from_outputs(settings.OUTPUT_DIR)
+monitoring_state = MonitoringState()
+prediction_log = PredictionLog()
 update_model_info_gauge(fusion_engine.predictor.bundle_name, len(fusion_engine.predictor.features))
 
 PROTECTED = [Depends(require_api_key)]
@@ -139,6 +144,7 @@ def predict_propensity(req: PredictRequest) -> Dict[str, Any]:
         rules=result.get("applied_fusion_rules", []),
     )
     record_model_routing(result["model_variant"])
+    prediction_log.append(result)
     PROPENSITY_REQUESTS_TOTAL.labels(endpoint="/v1/predict/propensity", status="200").inc()
     return result
 
@@ -200,6 +206,7 @@ def get_batch_scores(decile: Optional[int] = None, limit: int = 50, variant: str
 
 @app.get("/metrics")
 def prometheus_metrics() -> Response:
+    refresh_monitoring_gauges(monitoring_state, fusion_engine.batch_store)
     return Response(content=generate_prometheus_payload(), media_type="text/plain")
 
 
