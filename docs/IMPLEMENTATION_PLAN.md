@@ -35,7 +35,8 @@
 - **Hiện tại:**
   - Feature view được sinh từ contract (21 `Float64` + 7 `String`). Contract chuẩn hoá mọi feature số về `float64`; trước đây cùng một feature có thể là `int64` hoặc `float64` tuỳ dữ liệu.
   - Mỗi cutoff một snapshot, ghi thêm vào kho lịch sử một cách atomic.
-  - Kiểm tra chất lượng trước khi ghi hoặc chấm điểm (`src/features/quality.py`): khoảng giá trị, category hợp lệ, tính nhất quán giữa các cửa sổ thời gian, số household, tỷ lệ giá trị 0 so với snapshot trước. Ngưỡng được hiệu chỉnh trên 17 snapshot thật và cả 17 đều qua. Không dùng Evidently vì sẽ lặp phần drift PSI/KS đã có, và cái cần ở đây là kết quả đạt hay không đạt chứ không phải báo cáo.
+  - Kiểm tra chất lượng trước khi ghi hoặc chấm điểm (`src/features/quality.py`): khoảng giá trị, category hợp lệ, tính nhất quán giữa các cửa sổ thời gian, số household, tỷ lệ giá trị 0 so với snapshot trước. Ngưỡng được hiệu chỉnh trên 17 snapshot thật và cả 17 đều qua. Bước này tự viết thay vì dùng Evidently vì cái cần ở đây là kết quả đạt hay không đạt để chặn snapshot.
+  - Quan sát snapshot bằng Evidently (`src/feature_store/observability.py`): mỗi lần batch, so snapshot mới với snapshot trước. Gồm drift từng feature (Wasserstein/Jensen-Shannon), giá trị ngoài khoảng, cột hằng số và thống kê. Kết quả là báo cáo HTML, file JSON và gauge cho Grafana, kèm 3 alert. Ngưỡng được hiệu chỉnh trên 16 cặp snapshot thật: 0–4 trên 28 feature bị drift, giá trị ngoài khoảng dưới 0,3%. Evidently chỉ để quan sát, không chặn batch; việc chặn vẫn do bước kiểm tra chất lượng.
   - Không dùng online store (serving dùng điểm batch trong Redis). TTL 7 ngày: dữ liệu quá hạn thì báo lỗi, không âm thầm dùng.
   - Registry được đăng ký từ code; thư mục `feature_repo/` đã xoá.
   - Batch ghi snapshot mỗi lần chạy. Training mặc định đọc qua join point-in-time và tự backfill cutoff còn thiếu.

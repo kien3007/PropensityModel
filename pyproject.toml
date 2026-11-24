@@ -32,6 +32,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Evidently reports of feature store snapshots (batch / pipeline image only, not serving)
+observability = [
+    "evidently>=0.7.23,<0.8",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",

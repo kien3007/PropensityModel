@@ -53,6 +53,25 @@ Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc tro
 - **Bỏ qua feature store khi cần:** `--feature-source builder` (training tính lại trực tiếp), hoặc `FEATURE_STORE_ENABLED=false` (batch không ghi snapshot).
 - **Sao lưu:** kho lịch sử là nguồn của dữ liệu train, nên hãy sao lưu cùng `models_data`. Nếu mất, có thể dựng lại bằng `backfill` từ lớp Bronze.
 
+- **Quan sát snapshot bằng Evidently:**
+  - Mỗi lần chạy, batch so snapshot mới với snapshot trước đó và ghi ra `data/outputs/reports/feature_store/snapshot_<day>.html`. Mở file trong trình duyệt để xem phân phối hai snapshot chồng lên nhau theo từng feature, drift và thống kê.
+  - Trên Grafana, hàng *Feature Store* hiển thị:
+    - kết quả kiểm tra chất lượng;
+    - tỷ lệ feature bị drift;
+    - điểm drift của từng feature;
+    - tỷ lệ giá trị ngoài khoảng của từng feature.
+  - Bước này chỉ để quan sát: Evidently lỗi thì batch vẫn chạy tiếp.
+- **Cảnh báo của feature store:**
+  - `PropensityFeatureQualityFailed` (critical): snapshot bị kiểm tra chất lượng chặn lại, batch đã dừng. Xử lý như mục lỗi `FeatureQualityError` ở trên.
+  - `PropensityFeatureSnapshotDrift` (warning): hơn 25% feature bị drift so với snapshot trước. Trên dữ liệu thật, mức này thường chỉ 0–14%. Cách xử lý:
+    - Mở báo cáo HTML của snapshot đó.
+    - Nếu là thay đổi thật của hành vi (mùa vụ, campaign) thì không cần làm gì.
+    - Nếu là lỗi dữ liệu nguồn thì chạy lại batch sau khi sửa.
+  - `PropensityFeatureOutOfRange` (warning): hơn 5% giá trị của một feature nằm ngoài khoảng của snapshot trước. Hay gặp khi đơn vị dữ liệu nguồn bị đổi.
+- **Xem xu hướng qua nhiều snapshot:**
+  - Chạy `python -m scripts.feature_store profile --all --no-html` để tạo bản tóm tắt cho mọi snapshot.
+  - Sau đó chạy `python -m scripts.feature_store trend --feature <tên>`.
+
 ## 2. Lịch job
 
 | Job | Lịch | Chạy tay |
