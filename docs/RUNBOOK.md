@@ -45,6 +45,11 @@ Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc tro
   - Ghi đè lịch sử bằng `python -m scripts.feature_store backfill --training --overwrite`, hoặc xoá thư mục rồi backfill lại.
   - Sau đó chạy `scripts.reproduce_champion`.
   - Nếu đổi danh sách feature thì phải tăng `FEATURE_SET_VERSION`; tên feature view sẽ đổi theo.
+- **Lỗi `FeatureQualityError`** nghĩa là snapshot không qua bước kiểm tra chất lượng. Khi đó snapshot không được ghi vào store và batch dừng, không chấm điểm cũng không publish; điểm của lần chạy trước vẫn được giữ nguyên. Cách xử lý:
+  - Đọc danh sách vi phạm trong log. Ví dụ: giá trị âm, category lạ, số household giảm quá 10%, tỷ lệ giá trị 0 của một feature thay đổi quá 25 điểm %.
+  - Kiểm tra dữ liệu nguồn (Bronze, Silver) trước khi sửa code.
+  - Nếu category mới là hợp lệ (upstream đổi cách mã hoá), cập nhật `ALLOWED_CATEGORIES` trong `src/features/quality.py` rồi retrain.
+  - `FEATURE_QUALITY_CHECKS=false` chỉ dùng tạm thời khi đã xác nhận dữ liệu đúng.
 - **Bỏ qua feature store khi cần:** `--feature-source builder` (training tính lại trực tiếp), hoặc `FEATURE_STORE_ENABLED=false` (batch không ghi snapshot).
 - **Sao lưu:** kho lịch sử là nguồn của dữ liệu train, nên hãy sao lưu cùng `models_data`. Nếu mất, có thể dựng lại bằng `backfill` từ lớp Bronze.
 

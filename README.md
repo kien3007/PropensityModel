@@ -188,6 +188,7 @@ uvicorn src.serving.api:app --port 8000
 | Schema | Generated from the feature contract: 21 `Float64` + 7 `String`. View `household_features_multidomain_v1`, entity `household_key` |
 | Timeline | `DAY d` -> `2026-01-01 + d days` (UTC); TTL = `FEATURE_TTL_DAYS` (7). A read more than 7 days after the last snapshot fails instead of returning stale values |
 | Registry | Applied from code (`FeatureStoreClient.apply()`); no `feast apply` step |
+| Quality gate | `src/features/quality.py`, run before a snapshot is stored or scored: value ranges, known categories, window consistency (14d <= 30d <= ... counts and spends), one row per household, no loss of > 10% of households and no zero-share jump > 25 points vs the previous snapshot. A failing snapshot is not written and the batch stops (even without `STRICT_INFRA`). Switch: `FEATURE_QUALITY_CHECKS` |
 
 ```bash
 python -m scripts.feature_store status                 # snapshots in the history
@@ -336,7 +337,7 @@ run in seconds without real data.
 | Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_features_pit.py`, `test_lakehouse.py` |
 | Training & governance | `test_training_pipeline.py`, `test_governance.py` (gate, paired bootstrap, champion/challenger, atomic promotion, rollback), `test_targets.py` (purchase / lapse, value-ranked retention list), `test_predictor.py` (bundle validation) |
 | Serving & speed layer | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, idempotency, canary variants), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
-| Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, training and batch through the store) |
+| Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, training and batch through the store), `test_feature_quality.py` (each quality check, store refuses and batch stops on a bad snapshot) |
 | Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, fusion-rule evaluation, gauges), `test_monitoring.py`, `test_scheduler.py` |
 | Alerting | `docker/prometheus/alert_rules_test.yml` (`promtool test rules`, in CI) |
 

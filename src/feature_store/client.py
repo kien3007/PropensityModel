@@ -5,7 +5,7 @@ Layout under settings.FEATURE_STORE_DIR:
   offline/household_features.parquet   every snapshot ever written (one per cutoff day)
   registry.db                          Feast registry (applied from code; no `feast apply` needed)
 
-Writes:  `write_snapshot` appends (or replaces) the rows of one cutoff atomically; it never
+Writes:  `write_snapshot` runs the feature quality gate, then appends (or replaces) the rows of one cutoff atomically; it never
          drops other snapshots, so the offline store accumulates real history.
 Reads:   `get_historical_features` is a Feast point-in-time join (entity rows at a cutoff get
          the latest snapshot with timestamp <= cutoff, within the TTL).
@@ -41,6 +41,7 @@ from src.features.contract import (
     normalize_feature_dtypes,
     validate_feature_frame,
 )
+from src.features.quality import check_feature_quality
 
 logger = logging.getLogger("FeatureStore")
 
@@ -89,17 +90,34 @@ class FeatureStoreClient:
         days = pd.read_parquet(self.offline_path, columns=["cutoff_day"])["cutoff_day"]
         return sorted(int(d) for d in days.unique())
 
+    @staticmethod
+    def _previous_snapshot(existing: pd.DataFrame, cutoff_day: int) -> Optional[pd.DataFrame]:
+        """Rows of the latest stored snapshot strictly before `cutoff_day` (None if there is none)."""
+        if not len(existing):
+            return None
+        earlier = existing.loc[existing["cutoff_day"] < int(cutoff_day), "cutoff_day"]
+        if earlier.empty:
+            return None
+        return existing[existing["cutoff_day"] == earlier.max()]
+
     def write_snapshot(self, features: pd.DataFrame, cutoff_day: int) -> int:
-        """Appends one cutoff's snapshot to the offline history (replacing that cutoff if present)."""
+        """
+        Appends one cutoff's snapshot to the offline history (replacing that cutoff if present).
+        The snapshot must pass the quality gate first (compared with the previous stored
+        snapshot); a failing snapshot raises FeatureQualityError and nothing is written.
+        """
         validate_feature_frame(features)
         snap = normalize_feature_dtypes(features)[["household_key", *MODEL_FEATURES]].copy()
         for col in CATEGORICAL_FEATURES:  # Feast String columns are stored as plain strings
             snap[col] = snap[col].astype(str)
+
+        existing = self._read_offline()
+        if settings.FEATURE_QUALITY_CHECKS:
+            check_feature_quality(snap, self._previous_snapshot(existing, cutoff_day), cutoff_day=int(cutoff_day))
+
         snap.insert(1, "cutoff_day", int(cutoff_day))
         snap.insert(2, "event_timestamp", day_to_timestamp(cutoff_day))
         snap.insert(3, "created_timestamp", datetime.datetime.now(datetime.timezone.utc))
-
-        existing = self._read_offline()
         kept = existing[existing["cutoff_day"] != int(cutoff_day)] if len(existing) else existing
         combined = pd.concat([kept, snap], ignore_index=True) if len(kept) else snap
         combined = combined.sort_values(["cutoff_day", "household_key"]).reset_index(drop=True)

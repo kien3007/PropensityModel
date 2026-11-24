@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     FEATURE_STORE_DIR: Path = BASE_DIR / "data/feature_store"
     FEATURE_TTL_DAYS: int = 7                  # snapshot cadence: older features are treated as missing
     TRAINING_FEATURE_SOURCE: str = "feast"     # "feast" (historical store) or "builder" (recompute)
+    FEATURE_QUALITY_CHECKS: bool = True        # quality gate (src/features/quality.py) before store/score
 
     # Production hardening. STRICT_INFRA=true disables every silent in-memory fallback:
     # the service fails fast if Redis (or an enabled Kafka) is unreachable.

@@ -28,6 +28,18 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def session_feature_store(tmp_path_factory):
+    """
+    Session-wide guard: module/session fixtures (e.g. a synthetic champion trained once per
+    module) run before function fixtures, so without this they would write synthetic
+    snapshots into the real feature store.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(settings, "FEATURE_STORE_DIR", tmp_path_factory.mktemp("feature_store_session"))
+        yield
+
+
 @pytest.fixture(autouse=True)
 def isolated_feature_store(tmp_path, monkeypatch):
     """Every test gets its own empty feature store so snapshots never leak between datasets."""
