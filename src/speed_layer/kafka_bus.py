@@ -203,7 +203,7 @@ class KafkaEventConsumerWorker:
                 if time.monotonic() - last_lag_check >= 15:
                     last_lag_check = time.monotonic()
                     PROPENSITY_CONSUMER_LAG.set(self.current_lag(consumer))
-                for topic_partition, messages in records.items():
+                for messages in records.values():
                     for msg in messages:
                         event = msg.value
                         delta = self.processor.process_event(event)

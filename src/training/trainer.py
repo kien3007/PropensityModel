@@ -53,7 +53,8 @@ class ModelTrainer:
 
         fit_kwargs: Dict[str, Any] = {}
         if X_val is not None and y_val is not None:
-            fit_kwargs["eval_set"] = [(self._prepare(X_val), np.asarray(y_val, dtype=int))]
+            fit_kwargs["eval_X"] = (self._prepare(X_val),)
+            fit_kwargs["eval_y"] = (np.asarray(y_val, dtype=int),)
             fit_kwargs["eval_metric"] = "binary_logloss"
             fit_kwargs["callbacks"] = [lgb.early_stopping(self.early_stopping_rounds, first_metric_only=True, verbose=False)]
 

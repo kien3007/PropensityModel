@@ -60,34 +60,6 @@ NUMERIC_FEATURES: List[str] = [f for f in MODEL_FEATURES if f not in CATEGORICAL
 
 CATEGORICAL_FILL_VALUE = "UNKNOWN"
 
-# Legacy 23 RFM/cadence features of the retired "18 + chu kỳ" bundle. Kept only so the
-# legacy extractor (and its tests) still work; no supported model uses them.
-LEGACY_FEATURES_23: List[str] = [
-    "recency_days",
-    "observed_tenure_days",
-    "baskets_7d",
-    "sales_7d",
-    "line_items_7d",
-    "active_days_7d",
-    "baskets_30d",
-    "sales_30d",
-    "line_items_30d",
-    "active_days_30d",
-    "baskets_90d",
-    "sales_90d",
-    "line_items_90d",
-    "active_days_90d",
-    "baskets_180d",
-    "sales_180d",
-    "line_items_180d",
-    "active_days_180d",
-    "cadence_median_gap_180d",
-    "cadence_gap_std_180d",
-    "cadence_recency_ratio",
-    "cadence_has_gap",
-    "cadence_has_two_gaps",
-]
-
 FEATURE_SETS: Dict[str, List[str]] = {FEATURE_SET_VERSION: MODEL_FEATURES}
 
 

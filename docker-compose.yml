@@ -10,8 +10,6 @@
 # outputs_data (batch artefacts, monitoring reports) and models_data (champion registry,
 # seeded from the image on first use, so containers never write into the git checkout).
 # Raw Dunnhumby CSVs are mounted read-only from RAW_DATA_DIR.
-# Postgres / MinIO are not used by the application code; they are kept behind the
-# optional "storage" profile.
 # ==============================================================================
 
 x-app-env: &app-env
@@ -207,41 +205,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # ---------------------------------------------------------------- optional storage profile
-  # Not used by the application code today. MinIO's community images are no longer
-  # published on Docker Hub; set MINIO_IMAGE to an image you have access to.
-  postgres:
-    image: postgres:16-alpine
-    profiles: ["storage"]
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-propensity_oltp}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  minio:
-    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2024-03-30T09-41-56Z}
-    profiles: ["storage"]
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
 volumes:
   redis_data:
   kafka_data:
@@ -250,5 +213,3 @@ volumes:
   models_data:
   prometheus_data:
   grafana_data:
-  postgres_data:
-  minio_data:

@@ -164,4 +164,3 @@ curl -X POST -H "X-API-Key: $KEY" http://localhost:8000/v1/models/reload
 
 - Rate limit chỉ đếm trong từng tiến trình, mỗi worker giữ bộ đếm riêng. Cần giới hạn chung thì đặt ở gateway.
 - Luật fusion là heuristic. Báo cáo `fusion_rules` (job feedback) chỉ có ý nghĩa khi đã có đủ dữ liệu sự kiện trong ngày thật.
-- MinIO và Postgres nằm sau profile `storage` và không được code sử dụng. Image cộng đồng của MinIO không còn trên Docker Hub.

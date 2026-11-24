@@ -15,7 +15,7 @@ import pandas as pd
 from scipy import stats
 
 from src.config.settings import settings
-from src.features.pit_extractor import MULTIDOMAIN_FEATURES_28
+from src.features.contract import MODEL_FEATURES
 
 logger = logging.getLogger("DriftDetector")
 
@@ -134,7 +134,7 @@ class DataDriftDetector:
         """
         Evaluates data drift for all features between reference (training/baseline) and current batch.
         """
-        features = features or MULTIDOMAIN_FEATURES_28
+        features = features or MODEL_FEATURES
         categorical_features = categorical_features or [
             "classification_1",
             "classification_2",

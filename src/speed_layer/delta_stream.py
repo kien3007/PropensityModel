@@ -110,7 +110,7 @@ class SpeedLayerProcessor:
     def _save_delta(self, household_key: int, delta: Dict[str, Any]) -> None:
         if self.redis_client:
             try:
-                self.redis_client.setex(DELTA_KEY.format(hh=household_key), settings.REDIS_TTL_SECONDS, json.dumps(delta))
+                self.redis_client.set(DELTA_KEY.format(hh=household_key), json.dumps(delta), ex=settings.REDIS_TTL_SECONDS)
                 return
             except Exception as e:
                 logger.error(f"Error writing to Redis: {e}")
