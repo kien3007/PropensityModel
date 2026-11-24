@@ -14,7 +14,7 @@ from src.features.contract import (
     infer_feature_set_version,
     validate_feature_frame,
 )
-from src.features.pit_extractor import MultiDomainFeatureBuilder, PointInTimeFeatureExtractor
+from src.features.pit_extractor import MultiDomainFeatureBuilder
 from src.lakehouse.engine import LakehouseEngine
 from src.training.dataset_builder import DatasetBuilder
 
@@ -81,7 +81,7 @@ def test_training_rows_equal_batch_scoring_rows(synthetic_data):
     builder = MultiDomainFeatureBuilder(synthetic_data)
     cutoff = 150
     train_rows = DatasetBuilder(builder).build([cutoff], horizon_days=7)
-    batch_rows = PointInTimeFeatureExtractor.extract_multidomain_features(cutoff, data=synthetic_data)
+    batch_rows = MultiDomainFeatureBuilder(synthetic_data).features_at(cutoff)
     pdt.assert_frame_equal(
         train_rows[MODEL_FEATURES].reset_index(drop=True),
         batch_rows[MODEL_FEATURES].reset_index(drop=True),

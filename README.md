@@ -22,7 +22,7 @@ Documentation:
 - [Runbook](docs/RUNBOOK.md): jobs, retrain / promote / rollback, alert handling.
 - [Target & business-value analysis](docs/analysis/TARGET_ANALYSIS.md).
 - [Implementation plan & status](docs/IMPLEMENTATION_PLAN.md).
-- [Architecture spec](docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md), [Excalidraw diagram](docs/architecture/lambda_architecture.excalidraw).
+- [Architecture spec](docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md), [Architecture diagrams](docs/architecture/ARCHITECTURE.md), [Excalidraw diagram](docs/architecture/system_architecture.excalidraw).
 - [Archived CRISP-DM / EDA work](docs/analysis/archive_crisp_dm/README.md).
 
 ---
@@ -337,7 +337,7 @@ run in seconds without real data.
 
 | Area | Tests |
 |---|---|
-| Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_features_pit.py`, `test_lakehouse.py` |
+| Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_lakehouse.py` |
 | Training & governance | `test_training_pipeline.py`, `test_governance.py` (gate, paired bootstrap, champion/challenger, atomic promotion, rollback), `test_targets.py` (purchase / lapse, value-ranked retention list), `test_predictor.py` (bundle validation) |
 | Serving & speed layer | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, idempotency, canary variants), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
 | Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, training and batch through the store), `test_feature_quality.py` (each quality check, store refuses and batch stops on a bad snapshot), `test_feature_store_observability.py` (Evidently profile, injected shift detected, trends, gauges, profiling never blocks the batch) |
@@ -368,8 +368,6 @@ Details are in [docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md](docs/a
   purchase households would mostly buy anyway.
 - **Fusion rules are heuristics.** The dataset has no real intraday events to calibrate them.
 - **Rate limiting is per process.** Enforce a global limit at the gateway.
-- **Storage profile is unused.** MinIO and Postgres sit behind the optional `storage` profile and are not used by the
-  application code. MinIO community images are no longer published on Docker Hub.
 
 ---
 

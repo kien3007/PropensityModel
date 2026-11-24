@@ -10,15 +10,12 @@ is the single code path used by training, batch scoring and the feature store.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, List, Optional
 
-import numpy as np
 import pandas as pd
 
 from src.features.contract import (
     CATEGORICAL_FEATURES,
-    LEGACY_FEATURES_23,
     MODEL_FEATURES,
     normalize_feature_dtypes,
     validate_feature_frame,
@@ -29,120 +26,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Backwards-compatible aliases (feature store, older imports).
-MULTIDOMAIN_FEATURES_28: List[str] = MODEL_FEATURES
-CATEGORICAL_FEATURES_28: List[str] = CATEGORICAL_FEATURES
-
-DEFAULT_HOUSEHOLDS: List[int] = list(range(1, 2501))
-
 PERISHABLE_DEPARTMENTS: List[str] = [
     "PRODUCE", "MEAT", "MEAT-PCKGD", "DELI", "PASTRY", "DAIRY"
 ]
 
 
 class PointInTimeFeatureExtractor:
-    """
-    Extracts Point-in-Time behavioral, RFM, and cadence features as of cutoff date t_0.
-    """
-
-    @staticmethod
-    def extract_features(
-        transactions: pd.DataFrame,
-        cutoff: int,
-        feature_cols: List[str] = LEGACY_FEATURES_23,
-    ) -> pd.DataFrame:
-        """
-        LEGACY 23-feature RFM/cadence extractor (retired "18 + chu kỳ" bundle).
-        Extracts features strictly for transactions where DAY <= cutoff.
-        """
-        source = transactions.loc[transactions["DAY"] <= cutoff].copy()
-        if source.empty:
-            raise ValueError(f"No transactions found on or before cutoff DAY = {cutoff}")
-
-        # Validate basket uniqueness per household and day
-        scope = source.groupby("BASKET_ID").agg(
-            households=("household_key", "nunique"), days=("DAY", "nunique")
-        )
-        if not (scope["households"].eq(1).all() and scope["days"].eq(1).all()):
-            raise ValueError("Basket ID is not unique per household and day")
-
-        basket = (
-            source.groupby(["household_key", "BASKET_ID", "DAY"], as_index=False, sort=False)
-            .agg(sales=("SALES_VALUE", "sum"), line_items=("SALES_VALUE", "size"))
-        )
-
-        daily = (
-            basket.groupby(["household_key", "DAY"], as_index=False)
-            .agg(baskets=("BASKET_ID", "size"), sales=("sales", "sum"), line_items=("line_items", "sum"))
-        )
-
-        first = daily.groupby("household_key")["DAY"].min()
-        last = daily.groupby("household_key")["DAY"].max()
-
-        snapshot = pd.DataFrame(
-            {
-                "household_key": first.index,
-                "snapshot_day": cutoff,
-                "recency_days": cutoff - last.to_numpy(),
-                "observed_tenure_days": cutoff - first.to_numpy(),
-            }
-        ).set_index("household_key")
-
-        # Rolling window metrics
-        for w in (7, 30, 90, 180):
-            window = daily.loc[(daily["DAY"] > cutoff - w) & (daily["DAY"] <= cutoff)]
-            agg = window.groupby("household_key").agg(
-                baskets=("baskets", "sum"),
-                sales=("sales", "sum"),
-                line_items=("line_items", "sum"),
-                active_days=("DAY", "size"),
-            )
-            for col in ["baskets", "sales", "line_items", "active_days"]:
-                snapshot[f"{col}_{w}d"] = agg[col].reindex(snapshot.index).fillna(0)
-
-        # Precision float64 cumulative sales matching data prep contract
-        sales_matrix = (
-            daily.pivot(index="household_key", columns="DAY", values="sales")
-            .reindex(index=snapshot.index, columns=range(cutoff + 1))
-            .fillna(0)
-            .to_numpy(dtype=np.float64)
-        )
-        cumulative_sales = np.cumsum(sales_matrix, axis=1)
-        for w in (7, 30, 90, 180):
-            snapshot[f"sales_{w}d"] = cumulative_sales[:, cutoff] - cumulative_sales[:, max(cutoff - w, 0)]
-
-        # Cadence features
-        days = daily.loc[
-            (daily["DAY"] > cutoff - 180) & (daily["DAY"] <= cutoff), ["household_key", "DAY"]
-        ].sort_values(["household_key", "DAY"]).copy()
-        days["gap"] = days.groupby("household_key")["DAY"].diff()
-        gap = days.groupby("household_key")["gap"].agg(["count", "median", "std"])
-
-        snapshot["cadence_median_gap_180d"] = gap["median"]
-        snapshot["cadence_gap_std_180d"] = gap["std"]
-        snapshot["cadence_has_gap"] = gap["count"].ge(1).reindex(snapshot.index, fill_value=False).astype(int)
-        snapshot["cadence_has_two_gaps"] = gap["count"].ge(2).reindex(snapshot.index, fill_value=False).astype(int)
-        snapshot["cadence_recency_ratio"] = snapshot["recency_days"] / snapshot["cadence_median_gap_180d"]
-
-        snapshot = snapshot.reset_index()
-
-        # Guarantee full universe of 2,500 households
-        all_hh = pd.DataFrame({"household_key": list(range(1, 2501))})
-        snapshot = all_hh.merge(snapshot, on="household_key", how="left")
-        snapshot["snapshot_day"] = snapshot["snapshot_day"].fillna(cutoff).astype(int)
-        snapshot["recency_days"] = snapshot["recency_days"].fillna(cutoff).astype(float)
-        snapshot["observed_tenure_days"] = snapshot["observed_tenure_days"].fillna(cutoff).astype(float)
-
-        for col in feature_cols:
-            if col not in snapshot.columns:
-                snapshot[col] = 0.0
-            snapshot[col] = snapshot[col].fillna(0.0)
-
-        assert not snapshot.duplicated(["household_key", "snapshot_day"]).any()
-        assert set(feature_cols).issubset(snapshot.columns)
-        assert not snapshot[feature_cols].isin([np.inf, -np.inf]).any().any()
-
-        return snapshot
+    """Trip-level basket table that every feature (and label) is computed from."""
 
     @staticmethod
     def build_trip_level_baskets(
@@ -173,28 +63,11 @@ class PointInTimeFeatureExtractor:
         baskets["inter_trip_days"] = baskets["DAY"] - baskets["prev_day"]
         return baskets
 
-    @staticmethod
-    def extract_multidomain_features(
-        cutoff: int,
-        raw_data_dir: Optional[Path | str] = None,
-        data: Optional["RawDataBundle"] = None,
-        lookback_days: int = 180,
-    ) -> pd.DataFrame:
-        """
-        Convenience wrapper: loads data (unless given) and computes the 28 features at `cutoff`.
-        Prefer `MultiDomainFeatureBuilder` when extracting several cutoffs from one dataset.
-        """
-        if data is None:
-            from src.data.loader import DataLoader
-
-            data = DataLoader.from_csv(raw_data_dir) if raw_data_dir is not None else DataLoader.load()
-        return MultiDomainFeatureBuilder(data, lookback_days=lookback_days).features_at(cutoff)
-
 
 def compute_multidomain_features(
     baskets: pd.DataFrame,
     cutoff: int,
-    households: Optional[Iterable[int]] = None,
+    households: Iterable[int],
     campaigns: Optional[pd.DataFrame] = None,
     redemptions: Optional[pd.DataFrame] = None,
     demographics: Optional[pd.DataFrame] = None,
@@ -209,7 +82,7 @@ def compute_multidomain_features(
     `campaigns` is campaign_table joined with campaign_desc (START_DAY / END_DAY).
     """
     hist = baskets[(baskets["DAY"] <= cutoff) & (baskets["DAY"] >= cutoff - lookback_days)].copy()
-    universe = list(households) if households is not None else DEFAULT_HOUSEHOLDS
+    universe = list(households)
     feats = pd.DataFrame({"household_key": universe})
     feats["cutoff_day"] = cutoff
 
