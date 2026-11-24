@@ -34,9 +34,9 @@ Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc tro
 
 - **Vị trí:** `FEATURE_STORE_DIR`; trong docker là `/app/data/lakehouse/feature_store`, nằm trong volume `lakehouse_data`.
   - Kho lịch sử (offline): `offline/household_features.parquet`, mỗi cutoff một snapshot.
-  - Online store: SQLite `online_store.db`.
+  - Không có online store: serving dùng điểm batch tính sẵn trong Redis, không đọc feature trực tiếp.
   - Registry: `registry.db`, được đăng ký tự động từ code.
-- **Batch** mỗi lần chạy ghi thêm snapshot của cutoff đó và cập nhật online store. Training mặc định (`TRAINING_FEATURE_SOURCE=feast`) đọc feature bằng join point-in-time. Cutoff nào chưa có snapshot thì được tính và ghi bổ sung một lần.
+- **Batch** mỗi lần chạy ghi thêm snapshot của cutoff đó. Training mặc định (`TRAINING_FEATURE_SOURCE=feast`) đọc feature bằng join point-in-time. Cutoff nào chưa có snapshot thì được tính và ghi bổ sung một lần.
 - **Kiểm tra:** `python -m scripts.feature_store status`. Sau mỗi lần batch, ngày cutoff mới phải xuất hiện trong danh sách.
 - **Lỗi `MissingSnapshotError` ("no snapshot within 7 days")** nghĩa là feature được yêu cầu ở thời điểm cách snapshot gần nhất quá TTL. Cách xử lý:
   - Chạy `backfill --cutoffs <ngày>`, hoặc chạy lại batch.
@@ -45,6 +45,11 @@ Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc tro
   - Ghi đè lịch sử bằng `python -m scripts.feature_store backfill --training --overwrite`, hoặc xoá thư mục rồi backfill lại.
   - Sau đó chạy `scripts.reproduce_champion`.
   - Nếu đổi danh sách feature thì phải tăng `FEATURE_SET_VERSION`; tên feature view sẽ đổi theo.
+- **Lỗi `FeatureQualityError`** nghĩa là snapshot không qua bước kiểm tra chất lượng. Khi đó snapshot không được ghi vào store và batch dừng, không chấm điểm cũng không publish; điểm của lần chạy trước vẫn được giữ nguyên. Cách xử lý:
+  - Đọc danh sách vi phạm trong log. Ví dụ: giá trị âm, category lạ, số household giảm quá 10%, tỷ lệ giá trị 0 của một feature thay đổi quá 25 điểm %.
+  - Kiểm tra dữ liệu nguồn (Bronze, Silver) trước khi sửa code.
+  - Nếu category mới là hợp lệ (upstream đổi cách mã hoá), cập nhật `ALLOWED_CATEGORIES` trong `src/features/quality.py` rồi retrain.
+  - `FEATURE_QUALITY_CHECKS=false` chỉ dùng tạm thời khi đã xác nhận dữ liệu đúng.
 - **Bỏ qua feature store khi cần:** `--feature-source builder` (training tính lại trực tiếp), hoặc `FEATURE_STORE_ENABLED=false` (batch không ghi snapshot).
 - **Sao lưu:** kho lịch sử là nguồn của dữ liệu train, nên hãy sao lưu cùng `models_data`. Nếu mất, có thể dựng lại bằng `backfill` từ lớp Bronze.
 

@@ -1,6 +1,6 @@
 """
 Feast historical feature store: append-only snapshot history, point-in-time reads that equal
-the feature builder, TTL behaviour, online store freshness, training through the store and
+the feature builder, TTL behaviour, training through the store and
 the batch pipeline write path.
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ def test_snapshots_accumulate_and_replace_by_cutoff(client, builder):
     client.write_snapshot(builder.features_at(180), 180)
     assert client.snapshot_days() == [120, 150, 180]
     # re-writing a cutoff replaces it instead of duplicating rows
-    client.write_snapshot(builder.features_at(150), 150, online=False)
+    client.write_snapshot(builder.features_at(150), 150)
     offline = pd.read_parquet(client.offline_path)
     assert client.snapshot_days() == [120, 150, 180]
     assert len(offline) == 3 * len(builder.households)
@@ -70,12 +70,11 @@ def test_pit_join_uses_latest_snapshot_within_ttl(client, builder):
         client.get_historical_features(builder.households, 140)  # no snapshot at or before
 
 
-def test_online_store_holds_latest_snapshot(client, builder):
+def test_no_online_store(client, builder):
     client.write_snapshot(builder.features_at(180), 180)
-    client.write_snapshot(builder.features_at(100), 100)  # older: history only, online untouched
-    online = client.get_online_features([1, 2]).set_index("household_key")
-    latest = builder.features_at(180).set_index("household_key")
-    assert online.loc[[1, 2], "spend_90d"].tolist() == latest.loc[[1, 2], "spend_90d"].tolist()
+    assert not client.feature_view.online
+    assert not hasattr(client, "get_online_features")
+    assert not list(client.root.rglob("*online*"))
 
 
 def test_training_through_feature_store_matches_builder(builder, small_training_config, tmp_path):
@@ -106,7 +105,7 @@ def test_train_pipeline_reads_from_feature_store(synthetic_data, small_training_
     assert FeatureStoreClient().snapshot_days()  # default store (isolated per test) was populated
 
 
-def test_batch_pipeline_appends_snapshot_and_refreshes_online(synthetic_raw_dir, synthetic_data, tmp_path):
+def test_batch_pipeline_appends_snapshot(synthetic_raw_dir, synthetic_data, tmp_path):
     from src.pipelines.batch_pipeline import run_batch_pipeline
     from src.serving.batch_store import BatchScoreStore
 
@@ -118,4 +117,4 @@ def test_batch_pipeline_appends_snapshot_and_refreshes_online(synthetic_raw_dir,
     fs = FeatureStoreClient(root=settings.FEATURE_STORE_DIR)
     assert summary["feature_store"]["rows"] == len(synthetic_data.households)
     assert fs.snapshot_days() == [180]
-    assert fs.get_online_features([1])["spend_90d"].notna().all()
+    assert fs.get_historical_features([1], 180)["spend_90d"].notna().all()

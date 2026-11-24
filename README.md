@@ -40,7 +40,7 @@ flowchart TD
         Bronze["DuckDB Lakehouse - Bronze Parquet"]
         Loader["DataLoader -> RawDataBundle"]
         Features["MultiDomainFeatureBuilder<br/>28 point-in-time features (DAY <= t0)"]
-        FS["Feast feature store<br/>offline snapshot history + online store"]
+        FS["Feast feature store<br/>offline snapshot history"]
         Train["Train pipeline<br/>LightGBM + calibration + governance gate"]
         Registry["Model registry<br/>champion / history / rollback"]
         Score["Batch scoring<br/>purchase + lapse (+ challenger)"]
@@ -90,7 +90,7 @@ flowchart TD
 Design rules that hold everywhere:
 - **One feature contract** ([src/features/contract.py](src/features/contract.py)) and one feature code path, shared by training, batch scoring and the feature store. Parity is tested: CSV vs Lakehouse, and training rows vs batch rows.
 - **Feature store as the training source:** every batch run appends its snapshot to the Feast
-  offline history and refreshes the online store. Training reads features back through
+  offline history. Training reads features back through
   point-in-time joins, and cutoffs that were never snapshotted are backfilled once. Reads from the
   store are tested to equal recomputation. See [section 4.1](#41-feature-store).
 - **One model definition** ([src/config/model_config.py](src/config/model_config.py)): target, horizon, temporal splits, hyper-parameters and gate. Every pipeline, DAG and the scheduler read it.
@@ -184,15 +184,15 @@ uvicorn src.serving.api:app --port 8000
 |---|---|
 | Location | `FEATURE_STORE_DIR` (default `data/feature_store`; in docker `/app/data/lakehouse/feature_store`) |
 | Offline | `offline/household_features.parquet`: one snapshot per cutoff, appended atomically (re-writing a cutoff replaces it) |
-| Online | SQLite, holds the latest snapshot (older backfills never overwrite it) |
+| Online | None. Serving uses precomputed batch scores in Redis plus the speed layer, not live features |
 | Schema | Generated from the feature contract: 21 `Float64` + 7 `String`. View `household_features_multidomain_v1`, entity `household_key` |
 | Timeline | `DAY d` -> `2026-01-01 + d days` (UTC); TTL = `FEATURE_TTL_DAYS` (7). A read more than 7 days after the last snapshot fails instead of returning stale values |
 | Registry | Applied from code (`FeatureStoreClient.apply()`); no `feast apply` step |
+| Quality gate | `src/features/quality.py`, run before a snapshot is stored or scored: value ranges, known categories, window consistency (14d <= 30d <= ... counts and spends), one row per household, no loss of > 10% of households and no zero-share jump > 25 points vs the previous snapshot. A failing snapshot is not written and the batch stops (even without `STRICT_INFRA`). Switch: `FEATURE_QUALITY_CHECKS` |
 
 ```bash
 python -m scripts.feature_store status                 # snapshots in the history
 python -m scripts.feature_store backfill --training    # all fit/val/test cutoffs of both targets
-python -m scripts.feature_store online --households 1,2
 python -m scripts.feature_store history --household 1  # PIT values at every snapshot
 python -m src.pipelines.train_pipeline --feature-source builder   # bypass the store (recompute)
 ```
@@ -337,7 +337,7 @@ run in seconds without real data.
 | Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_features_pit.py`, `test_lakehouse.py` |
 | Training & governance | `test_training_pipeline.py`, `test_governance.py` (gate, paired bootstrap, champion/challenger, atomic promotion, rollback), `test_targets.py` (purchase / lapse, value-ranked retention list), `test_predictor.py` (bundle validation) |
 | Serving & speed layer | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, idempotency, canary variants), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
-| Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, online freshness, training and batch through the store) |
+| Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, training and batch through the store), `test_feature_quality.py` (each quality check, store refuses and batch stops on a bad snapshot) |
 | Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, fusion-rule evaluation, gauges), `test_monitoring.py`, `test_scheduler.py` |
 | Alerting | `docker/prometheus/alert_rules_test.yml` (`promtool test rules`, in CI) |
 

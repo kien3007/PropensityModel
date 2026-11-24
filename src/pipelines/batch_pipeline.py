@@ -18,6 +18,7 @@ from src.config.model_config import LAPSE_TRAINING_CONFIG
 from src.data.loader import DataLoader, RawDataBundle
 from src.features.contract import FEATURE_SET_VERSION
 from src.features.pit_extractor import MultiDomainFeatureBuilder
+from src.features.quality import FeatureQualityError, check_feature_quality
 from src.features.targets import LAPSE
 from src.lakehouse.engine import LakehouseEngine
 from src.models.predictor import PropensityPredictor
@@ -72,19 +73,28 @@ def run_batch_pipeline(
     builder = MultiDomainFeatureBuilder(data)
     snapshot = builder.features_at(cutoff_day)
 
-    # 2b. Persist the snapshot in the historical feature store (offline history + online refresh)
+    # 2b. Quality gate + persist the snapshot in the historical feature store (offline history).
+    # A snapshot that fails the quality gate stops the run regardless of STRICT_INFRA: scoring
+    # on wrong features is worse than not scoring. Infra failures of the store itself only
+    # stop the run in strict mode, but the snapshot is still checked before scoring.
     feature_store_summary = None
+    quality_checked = False
     if settings.FEATURE_STORE_ENABLED:
         try:
             from src.feature_store.client import FeatureStoreClient
 
             fs = FeatureStoreClient(root=feature_store_dir)
-            rows = fs.write_snapshot(snapshot, cutoff_day, online=True)
+            rows = fs.write_snapshot(snapshot, cutoff_day)  # runs the quality gate vs the previous snapshot
+            quality_checked = settings.FEATURE_QUALITY_CHECKS
             feature_store_summary = {"rows": rows, "snapshot_days": len(fs.snapshot_days()), "root": str(fs.root)}
+        except FeatureQualityError:
+            raise
         except Exception as e:
             if settings.STRICT_INFRA:
                 raise
             logger.error(f"Feature store write failed for DAY {cutoff_day}: {e}")
+    if settings.FEATURE_QUALITY_CHECKS and not quality_checked:
+        check_feature_quality(snapshot, cutoff_day=cutoff_day)  # no previous snapshot to compare with
 
     # 3. Model Inference & Business Tiering
     logger.info(f"Scoring {len(snapshot):,} households with Champion model '{predictor.bundle_name}'...")

@@ -55,7 +55,7 @@ def build_feature_view(offline_path: str, ttl_days: int) -> FeatureView:
         entities=[household],
         ttl=timedelta(days=ttl_days),
         schema=schema,
-        online=True,
+        online=False,  # offline history only; serving reads precomputed scores from Redis
         source=source,
         description=f"{len(MODEL_FEATURES)} point-in-time features ({FEATURE_SET_VERSION}), one snapshot per cutoff",
     )
