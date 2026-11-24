@@ -102,6 +102,26 @@ PROPENSITY_CONSUMER_LAG = Gauge(
 PROPENSITY_CONSUMED_EVENTS_TOTAL = Counter(
     "propensity_speed_consumed_events_total", "Events applied by the Kafka consumer worker", ["outcome"])
 
+PROPENSITY_FS_SNAPSHOT_DAY = Gauge(
+    "propensity_feature_store_snapshot_day", "DAY of the latest profiled feature store snapshot")
+PROPENSITY_FS_DRIFT_SHARE = Gauge(
+    "propensity_feature_store_drift_share",
+    "Share of features that drifted between the latest snapshot and the previous one (Evidently)")
+PROPENSITY_FS_FEATURE_DRIFT = Gauge(
+    "propensity_feature_store_feature_drift_score",
+    "Drift score per feature vs the previous snapshot (normed Wasserstein / Jensen-Shannon)", ["feature_name"])
+PROPENSITY_FS_OUT_OF_RANGE = Gauge(
+    "propensity_feature_store_out_of_range_share",
+    "Share of values outside the previous snapshot's [min, max], per feature", ["feature_name"])
+PROPENSITY_FS_ALMOST_CONSTANT = Gauge(
+    "propensity_feature_store_almost_constant_columns", "Almost-constant feature columns in the latest snapshot")
+PROPENSITY_FS_QUALITY_PASSED = Gauge(
+    "propensity_feature_store_quality_passed", "1 if the latest snapshot passed the quality gate, else 0")
+PROPENSITY_FS_QUALITY_VIOLATIONS = Gauge(
+    "propensity_feature_store_quality_violations", "Quality gate violations of the latest snapshot")
+PROPENSITY_FS_QUALITY_DAY = Gauge(
+    "propensity_feature_store_quality_cutoff_day", "DAY of the latest snapshot checked by the quality gate")
+
 DRIFT_STATUS_CODES = {"STABLE": 0, "WARNING": 1, "CRITICAL_DRIFT": 2}
 
 
@@ -122,12 +142,33 @@ def refresh_monitoring_gauges(state, batch_store=None) -> None:
                 PROPENSITY_PREDICTION_DRIFT_PSI.labels(target=target).set(drift["prediction_drift"]["psi"])
             if target == "purchase":
                 record_drift_metrics({f: d["psi"] for f, d in drift.get("feature_details", {}).items()})
+    refresh_feature_store_gauges(state)
     if batch_store is not None:
         for variant in ("champion", "challenger"):
             PROPENSITY_BATCH_VIEW_HOUSEHOLDS.labels(variant=variant).set(batch_store.count(variant))
         meta = batch_store.metadata("champion") or {}
         if meta.get("snapshot_day") is not None:
             PROPENSITY_BATCH_SNAPSHOT_DAY.set(meta["snapshot_day"])
+
+
+def refresh_feature_store_gauges(state) -> None:
+    quality = state.latest("feature_store_quality")
+    if quality:
+        PROPENSITY_FS_QUALITY_PASSED.set(1 if quality["passed"] else 0)
+        PROPENSITY_FS_QUALITY_VIOLATIONS.set(len(quality.get("violations") or []))
+        PROPENSITY_FS_QUALITY_DAY.set(quality["cutoff_day"])
+    profile = state.latest("feature_store_profile")
+    if not profile:
+        return
+    PROPENSITY_FS_SNAPSHOT_DAY.set(profile["cutoff_day"])
+    PROPENSITY_FS_ALMOST_CONSTANT.set(profile.get("almost_constant_columns") or 0)
+    drift = profile.get("drift")
+    if drift:
+        PROPENSITY_FS_DRIFT_SHARE.set(drift["drifted_share"] or 0)
+        for feature, col in drift["columns"].items():
+            PROPENSITY_FS_FEATURE_DRIFT.labels(feature_name=feature).set(col["score"])
+    for feature, oor in (profile.get("out_of_range") or {}).items():
+        PROPENSITY_FS_OUT_OF_RANGE.labels(feature_name=feature).set(oor["share"])
 
 
 def record_model_routing(variant: str) -> None:

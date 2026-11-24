@@ -189,11 +189,14 @@ uvicorn src.serving.api:app --port 8000
 | Timeline | `DAY d` -> `2026-01-01 + d days` (UTC); TTL = `FEATURE_TTL_DAYS` (7). A read more than 7 days after the last snapshot fails instead of returning stale values |
 | Registry | Applied from code (`FeatureStoreClient.apply()`); no `feast apply` step |
 | Quality gate | `src/features/quality.py`, run before a snapshot is stored or scored: value ranges, known categories, window consistency (14d <= 30d <= ... counts and spends), one row per household, no loss of > 10% of households and no zero-share jump > 25 points vs the previous snapshot. A failing snapshot is not written and the batch stops (even without `STRICT_INFRA`). Switch: `FEATURE_QUALITY_CHECKS` |
+| Observability | `src/feature_store/observability.py` ([Evidently](https://github.com/evidentlyai/evidently), extra `observability`). Every batch profiles its snapshot against the previous one: per-feature drift (normed Wasserstein / Jensen-Shannon, drift at >= 0.1), share of values outside the previous [min, max], constant columns, summary statistics. Writes `reports/feature_store/snapshot_<day>.html` (interactive) + `.json`, and publishes gauges to Grafana (row *Feature Store*). Observes only, never blocks. Switch: `FEATURE_STORE_PROFILING` |
 
 ```bash
 python -m scripts.feature_store status                 # snapshots in the history
 python -m scripts.feature_store backfill --training    # all fit/val/test cutoffs of both targets
 python -m scripts.feature_store history --household 1  # PIT values at every snapshot
+python -m scripts.feature_store profile --cutoff 711   # Evidently HTML report vs the previous snapshot
+python -m scripts.feature_store profile --all --no-html && python -m scripts.feature_store trend --feature spend_90d
 python -m src.pipelines.train_pipeline --feature-source builder   # bypass the store (recompute)
 ```
 
@@ -213,7 +216,7 @@ Day-to-day operation is described in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 - **Retraining:** a triggered retraining only produces a *candidate*. Promotion still goes through the governance gate. Set `AUTO_RETRAIN_ON_DEGRADATION=false` to only alert.
 - **Getting reports to Prometheus:** the batch and feedback jobs run in their own processes. They publish their reports to `MonitoringState` (Redis, plus a JSON file), and the serving API turns them into gauges on every `/metrics` scrape.
-- **Alerts:** defined in `docker/prometheus/alert_rules.yml` (drift, realized AUC drop, p99 latency, missing batch view, serving down, Kafka consumer lag) and routed by Alertmanager (`docker/alertmanager.yml`, port 9093). The rules are unit-tested with `promtool test rules docker/prometheus/alert_rules_test.yml` in CI.
+- **Alerts:** defined in `docker/prometheus/alert_rules.yml` (drift, realized AUC drop, feature snapshot rejected by the quality gate, snapshot-to-snapshot drift > 25% of features, out-of-range values > 5%, p99 latency, missing batch view, serving down, Kafka consumer lag) and routed by Alertmanager (`docker/alertmanager.yml`, port 9093). The rules are unit-tested with `promtool test rules docker/prometheus/alert_rules_test.yml` in CI.
 
 ```bash
 python -m src.scheduler.daemon --run-job feedback   # realized AUC for purchase + lapse, retrain if degraded
@@ -337,7 +340,7 @@ run in seconds without real data.
 | Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_features_pit.py`, `test_lakehouse.py` |
 | Training & governance | `test_training_pipeline.py`, `test_governance.py` (gate, paired bootstrap, champion/challenger, atomic promotion, rollback), `test_targets.py` (purchase / lapse, value-ranked retention list), `test_predictor.py` (bundle validation) |
 | Serving & speed layer | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, idempotency, canary variants), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
-| Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, training and batch through the store), `test_feature_quality.py` (each quality check, store refuses and batch stops on a bad snapshot) |
+| Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, training and batch through the store), `test_feature_quality.py` (each quality check, store refuses and batch stops on a bad snapshot), `test_feature_store_observability.py` (Evidently profile, injected shift detected, trends, gauges, profiling never blocks the batch) |
 | Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, fusion-rule evaluation, gauges), `test_monitoring.py`, `test_scheduler.py` |
 | Alerting | `docker/prometheus/alert_rules_test.yml` (`promtool test rules`, in CI) |
 

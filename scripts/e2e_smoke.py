@@ -5,7 +5,7 @@ Brings the stack up in an isolated compose project with throw-away secrets and
 non-default host ports, then checks the whole Lambda loop:
 
   build images -> services healthy -> batch scoring (ingest Bronze, score, publish to Redis,
-  feature snapshot) -> training from the Feast feature store (no promotion) -> ground-truth feedback -> API /ready + prediction from the
+  feature snapshot, quality gate, Evidently profile) -> training from the Feast feature store (no promotion) -> ground-truth feedback -> API /ready + prediction from the
   Redis batch view -> speed event through Kafka -> consumer -> fused score changes
   -> /metrics exposes monitoring gauges -> Prometheus scrapes both targets, alert rules
   loaded -> Alertmanager ready -> tear down.
@@ -150,6 +150,8 @@ def main() -> int:
         fs_status = pipeline("python", "-m", "scripts.feature_store", "status")
         check.record("feature store holds the batch snapshot", fs_status.returncode == 0 and "711" in fs_status.stdout,
                      next((ln for ln in fs_status.stdout.splitlines() if ln.startswith("Snapshots")), ""))
+        fs_trend = pipeline("python", "-m", "scripts.feature_store", "trend", "--feature", "spend_90d")
+        check.record("Evidently profile of the batch snapshot", fs_trend.returncode == 0 and "711" in fs_trend.stdout)
         train = pipeline("python", "-m", "src.pipelines.train_pipeline", "--no-promote", "--feature-source", "feast")
         check.record("training from the feature store (PIT reads + backfill, no promotion)", train.returncode == 0)
         feedback = pipeline("python", "-m", "src.scheduler.daemon", "--run-job", "feedback")
@@ -182,7 +184,9 @@ def main() -> int:
 
         status, metrics = http("GET", f"{serving}/metrics")
         check.record("/metrics exposes monitoring gauges", status == 200 and "propensity_realized_roc_auc" in metrics
-                     and 'propensity_batch_view_households{variant="champion"}' in metrics)
+                     and 'propensity_batch_view_households{variant="champion"}' in metrics
+                     and "propensity_feature_store_quality_passed 1.0" in metrics
+                     and "propensity_feature_store_snapshot_day 711.0" in metrics)
 
         def targets_up() -> bool:
             _, t = http("GET", f"{prometheus}/api/v1/targets")
@@ -192,7 +196,7 @@ def main() -> int:
         check.record("Prometheus scrapes serving + consumer", wait_for(targets_up, 90))
         _, rules = http("GET", f"{prometheus}/api/v1/rules")
         n_rules = sum(len(g["rules"]) for g in rules["data"]["groups"]) if isinstance(rules, dict) else 0
-        check.record("alert rules loaded", n_rules == 7, f"{n_rules} rules")
+        check.record("alert rules loaded", n_rules == 10, f"{n_rules} rules")
         check.record("Alertmanager ready", http("GET", f"{alertmanager}/-/ready")[0] == 200)
     finally:
         if not check.ok:

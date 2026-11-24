@@ -90,6 +90,19 @@ class FeatureStoreClient:
         days = pd.read_parquet(self.offline_path, columns=["cutoff_day"])["cutoff_day"]
         return sorted(int(d) for d in days.unique())
 
+    def previous_snapshot_day(self, cutoff_day: int) -> Optional[int]:
+        earlier = [d for d in self.snapshot_days() if d < int(cutoff_day)]
+        return earlier[-1] if earlier else None
+
+    def read_snapshot(self, cutoff_day: int) -> pd.DataFrame:
+        """The stored rows of exactly one cutoff (household_key + contract features)."""
+        if not self.offline_path.exists():
+            raise MissingSnapshotError("Feature store is empty")
+        df = pd.read_parquet(self.offline_path, filters=[("cutoff_day", "==", int(cutoff_day))])
+        if df.empty:
+            raise MissingSnapshotError(f"No feature snapshot for DAY {cutoff_day}")
+        return df[["household_key", *MODEL_FEATURES]].reset_index(drop=True)
+
     @staticmethod
     def _previous_snapshot(existing: pd.DataFrame, cutoff_day: int) -> Optional[pd.DataFrame]:
         """Rows of the latest stored snapshot strictly before `cutoff_day` (None if there is none)."""

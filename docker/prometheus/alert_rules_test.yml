@@ -85,3 +85,50 @@ tests:
             exp_annotations:
               summary: "Speed-layer consumer is 5000 events behind"
               description: "Intraday deltas are stale; fusion rules act on old information."
+
+  # Feature store: the quality gate rejects a snapshot; snapshot-to-snapshot drift and range.
+  - interval: 1m
+    input_series:
+      - series: 'propensity_feature_store_quality_passed'
+        values: "1 0"
+      - series: 'propensity_feature_store_quality_cutoff_day'
+        values: "704 711"
+      - series: 'propensity_feature_store_drift_share'
+        values: "0.04 0.5"
+      - series: 'propensity_feature_store_out_of_range_share{feature_name="spend_90d"}'
+        values: "0.002 0.2"
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: PropensityFeatureQualityFailed
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: PropensityFeatureQualityFailed
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Feature snapshot DAY 711 failed the quality gate"
+              description: >-
+                The batch stopped before scoring; the previous scores are still served.
+                Violations: data/outputs/reports/feature_store_quality_latest.json.
+      - eval_time: 0m
+        alertname: PropensityFeatureSnapshotDrift
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: PropensityFeatureSnapshotDrift
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "50% of features drifted vs the previous snapshot"
+              description: >-
+                Real snapshots move 0-14% of features between cutoffs. Open the Evidently report
+                data/outputs/reports/feature_store/snapshot_<day>.html.
+      - eval_time: 0m
+        alertname: PropensityFeatureOutOfRange
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: PropensityFeatureOutOfRange
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "20% of a feature's values are outside the previous snapshot's range"
+              description: "Check the out-of-range table in the Evidently report of the latest snapshot."

@@ -77,24 +77,53 @@ def run_batch_pipeline(
     # A snapshot that fails the quality gate stops the run regardless of STRICT_INFRA: scoring
     # on wrong features is worse than not scoring. Infra failures of the store itself only
     # stop the run in strict mode, but the snapshot is still checked before scoring.
+    state = monitoring_state or MonitoringState(report_dir=out_dir / "reports")
     feature_store_summary = None
+    fs = None
     quality_checked = False
-    if settings.FEATURE_STORE_ENABLED:
-        try:
-            from src.feature_store.client import FeatureStoreClient
+    try:
+        if settings.FEATURE_STORE_ENABLED:
+            try:
+                from src.feature_store.client import FeatureStoreClient
 
-            fs = FeatureStoreClient(root=feature_store_dir)
-            rows = fs.write_snapshot(snapshot, cutoff_day)  # runs the quality gate vs the previous snapshot
-            quality_checked = settings.FEATURE_QUALITY_CHECKS
-            feature_store_summary = {"rows": rows, "snapshot_days": len(fs.snapshot_days()), "root": str(fs.root)}
-        except FeatureQualityError:
-            raise
-        except Exception as e:
-            if settings.STRICT_INFRA:
+                fs = FeatureStoreClient(root=feature_store_dir)
+                rows = fs.write_snapshot(snapshot, cutoff_day)  # runs the quality gate vs the previous snapshot
+                quality_checked = settings.FEATURE_QUALITY_CHECKS
+                feature_store_summary = {"rows": rows, "snapshot_days": len(fs.snapshot_days()), "root": str(fs.root)}
+            except FeatureQualityError:
                 raise
-            logger.error(f"Feature store write failed for DAY {cutoff_day}: {e}")
-    if settings.FEATURE_QUALITY_CHECKS and not quality_checked:
-        check_feature_quality(snapshot, cutoff_day=cutoff_day)  # no previous snapshot to compare with
+            except Exception as e:
+                fs = None
+                if settings.STRICT_INFRA:
+                    raise
+                logger.error(f"Feature store write failed for DAY {cutoff_day}: {e}")
+        if settings.FEATURE_QUALITY_CHECKS and not quality_checked:
+            check_feature_quality(snapshot, cutoff_day=cutoff_day)  # no previous snapshot to compare with
+    except FeatureQualityError as e:
+        state.publish("feature_store_quality", {"cutoff_day": int(cutoff_day), "passed": False,
+                                                "violations": e.violations})
+        raise
+    if settings.FEATURE_QUALITY_CHECKS:
+        state.publish("feature_store_quality", {"cutoff_day": int(cutoff_day), "passed": True, "violations": []})
+
+    # 2c. Observability: Evidently profile of the new snapshot vs the previous one (HTML report +
+    # summary for Grafana). Never blocks the run.
+    if fs is not None and settings.FEATURE_STORE_PROFILING:
+        try:
+            from src.feature_store.observability import profile_stored_snapshot
+
+            profile = profile_stored_snapshot(fs, cutoff_day, report_dir=out_dir / "reports" / "feature_store")
+            state.publish("feature_store_profile", profile)
+            drift = profile["drift"] or {}
+            feature_store_summary["profile"] = {
+                "reference_day": profile["reference_day"],
+                "drifted_columns": drift.get("drifted_columns"),
+                "drifted_share": drift.get("drifted_share"),
+                "max_out_of_range_share": profile["max_out_of_range_share"],
+                "html_report": profile.get("html_report"),
+            }
+        except Exception as e:
+            logger.warning(f"Feature store profiling failed for DAY {cutoff_day}: {e}")
 
     # 3. Model Inference & Business Tiering
     logger.info(f"Scoring {len(snapshot):,} households with Champion model '{predictor.bundle_name}'...")
@@ -150,7 +179,7 @@ def run_batch_pipeline(
             reference_cutoffs=reference.cutoffs,
             current_cutoff=cutoff_day,
         )
-        (monitoring_state or MonitoringState(report_dir=out_dir / "reports")).publish("drift_purchase", drift_report)
+        state.publish("drift_purchase", drift_report)
         drift_summary = {
             "status": drift_report["overall_status"],
             "drift_ratio": drift_report["feature_drift_summary"]["drift_ratio"],
