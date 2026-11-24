@@ -61,7 +61,7 @@ omit = ["src/**/__init__.py"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = [".agent", "notebooks", "docs/analysis/archive_crisp_dm"]  # archive kept verbatim
+extend-exclude = [".agent", "notebooks"]
 
 [tool.ruff.lint]
 # Pin the rule set so CI does not depend on a developer's global ruff config.

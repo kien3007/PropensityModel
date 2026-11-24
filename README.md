@@ -21,9 +21,7 @@ Documentation:
 - [Model card](docs/MODEL_CARD.md): targets, data, metrics, limits.
 - [Runbook](docs/RUNBOOK.md): jobs, retrain / promote / rollback, alert handling.
 - [Target & business-value analysis](docs/analysis/TARGET_ANALYSIS.md).
-- [Implementation plan & status](docs/IMPLEMENTATION_PLAN.md).
-- [Architecture spec](docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md), [Architecture diagrams](docs/architecture/ARCHITECTURE.md), [Excalidraw diagram](docs/architecture/system_architecture.excalidraw).
-- [Archived CRISP-DM / EDA work](docs/analysis/archive_crisp_dm/README.md).
+- [Architecture diagrams](docs/architecture/ARCHITECTURE.md).
 
 ---
 
@@ -357,8 +355,6 @@ Storage and compute are decoupled, so the stack can move to GCP or AWS component
 | Speed / serving state | Redis 7 | Memorystore | ElastiCache | Redis replication, then a DNS switch |
 | Event bus | Kafka (KRaft) | Pub/Sub or managed Kafka | MSK / Kinesis | MirrorMaker 2 for Kafka targets |
 | Serving / pipelines | Docker images | GKE | EKS | Same images; blue/green cutover gated by `/ready` |
-
-Details are in [docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md](docs/architecture/LAMBDA_ARCHITECTURE_ONPREM_TO_CLOUD.md).
 
 ---
 

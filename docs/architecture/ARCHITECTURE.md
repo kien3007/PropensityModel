@@ -123,5 +123,3 @@ flowchart LR
 | Batch scoring | Thứ Hai 02:00 |
 | Feedback (AUC thực tế) | Thứ Tư 04:00 |
 | Train lại | Ngày 1 hằng tháng 03:00, hoặc khi retraining policy yêu cầu |
-
-Bản chi tiết đầy đủ mọi thành phần nằm ở [system_architecture.excalidraw](system_architecture.excalidraw).
