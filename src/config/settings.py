@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     REDIS_TTL_SECONDS: int = 86400  # 24 Hours
 
     # Feature store (Feast). Every batch run appends its snapshot to the offline history and
-    # refreshes the online store; training reads features back with point-in-time joins.
+    # training reads features back with point-in-time joins.
     FEATURE_STORE_ENABLED: bool = True
     FEATURE_STORE_DIR: Path = BASE_DIR / "data/feature_store"
     FEATURE_TTL_DAYS: int = 7                  # snapshot cadence: older features are treated as missing

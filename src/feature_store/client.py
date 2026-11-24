@@ -4,13 +4,12 @@ Feast-backed historical feature store.
 Layout under settings.FEATURE_STORE_DIR:
   offline/household_features.parquet   every snapshot ever written (one per cutoff day)
   registry.db                          Feast registry (applied from code; no `feast apply` needed)
-  online_store.db                      SQLite online store holding the latest snapshot
 
 Writes:  `write_snapshot` appends (or replaces) the rows of one cutoff atomically; it never
          drops other snapshots, so the offline store accumulates real history.
 Reads:   `get_historical_features` is a Feast point-in-time join (entity rows at a cutoff get
-         the latest snapshot with timestamp <= cutoff, within the TTL); `get_online_features`
-         reads the latest values per household.
+         the latest snapshot with timestamp <= cutoff, within the TTL).
+There is no online store: serving uses precomputed batch scores (Redis), not live features.
 `FeatureStoreSource` gives training the same interface as MultiDomainFeatureBuilder, reading
 features from the store and backfilling cutoffs that were never snapshotted.
 """
@@ -63,7 +62,7 @@ class FeatureStoreClient:
             provider="local",
             registry=str(self.root / "registry.db"),
             offline_store={"type": "file"},
-            online_store={"type": "sqlite", "path": str(self.root / "online_store.db")},
+            online_store=None,  # no online store: nothing is materialized or served live
             entity_key_serialization_version=3,
             repo_path=self.root,
         )
@@ -90,7 +89,7 @@ class FeatureStoreClient:
         days = pd.read_parquet(self.offline_path, columns=["cutoff_day"])["cutoff_day"]
         return sorted(int(d) for d in days.unique())
 
-    def write_snapshot(self, features: pd.DataFrame, cutoff_day: int, online: bool = True) -> int:
+    def write_snapshot(self, features: pd.DataFrame, cutoff_day: int) -> int:
         """Appends one cutoff's snapshot to the offline history (replacing that cutoff if present)."""
         validate_feature_frame(features)
         snap = normalize_feature_dtypes(features)[["household_key", *MODEL_FEATURES]].copy()
@@ -113,12 +112,8 @@ class FeatureStoreClient:
             Path(tmp).unlink(missing_ok=True)
 
         self.apply()
-        latest = max(self.snapshot_days())
-        if online and int(cutoff_day) >= latest:
-            self.store.write_to_online_store(FEATURE_VIEW_NAME, snap.drop(columns=["cutoff_day"]))
         logger.info(f"Feature snapshot DAY={cutoff_day}: {len(snap):,} households "
-                    f"(offline history: {combined['cutoff_day'].nunique()} snapshots"
-                    f"{', online refreshed' if online and int(cutoff_day) >= latest else ''}).")
+                    f"(history: {combined['cutoff_day'].nunique()} snapshots).")
         return len(snap)
 
     def backfill(self, builder, cutoffs: Iterable[int], overwrite: bool = False) -> List[int]:
@@ -127,7 +122,7 @@ class FeatureStoreClient:
         written = []
         for cutoff in sorted(set(int(c) for c in cutoffs)):
             if overwrite or cutoff not in existing:
-                self.write_snapshot(builder.features_at(cutoff), cutoff, online=False)
+                self.write_snapshot(builder.features_at(cutoff), cutoff)
                 written.append(cutoff)
         return written
 
@@ -155,12 +150,6 @@ class FeatureStoreClient:
         df = normalize_feature_dtypes(df[["household_key", "cutoff_day", *MODEL_FEATURES]])
         validate_feature_frame(df)
         return df
-
-    def get_online_features(self, household_keys: Sequence[int]) -> pd.DataFrame:
-        self.apply()
-        refs = [f"{FEATURE_VIEW_NAME}:{f}" for f in MODEL_FEATURES]
-        rows = [{"household_key": int(k)} for k in household_keys]
-        return self.store.get_online_features(features=refs, entity_rows=rows).to_df()
 
 
 class FeatureStoreSource:
@@ -199,7 +188,7 @@ class FeatureStoreSource:
             if not self.backfill_missing:
                 raise MissingSnapshotError(f"No feature snapshot for DAY {cutoff}")
             logger.info(f"Backfilling missing feature snapshot DAY={cutoff}")
-            self.client.write_snapshot(self.builder.features_at(cutoff), cutoff, online=False)
+            self.client.write_snapshot(self.builder.features_at(cutoff), cutoff)
         try:
             return self.client.get_historical_features(self.households, cutoff)
         except MissingSnapshotError as exc:

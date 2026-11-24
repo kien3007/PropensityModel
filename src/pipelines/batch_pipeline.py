@@ -72,14 +72,14 @@ def run_batch_pipeline(
     builder = MultiDomainFeatureBuilder(data)
     snapshot = builder.features_at(cutoff_day)
 
-    # 2b. Persist the snapshot in the historical feature store (offline history + online refresh)
+    # 2b. Persist the snapshot in the historical feature store (offline history)
     feature_store_summary = None
     if settings.FEATURE_STORE_ENABLED:
         try:
             from src.feature_store.client import FeatureStoreClient
 
             fs = FeatureStoreClient(root=feature_store_dir)
-            rows = fs.write_snapshot(snapshot, cutoff_day, online=True)
+            rows = fs.write_snapshot(snapshot, cutoff_day)
             feature_store_summary = {"rows": rows, "snapshot_days": len(fs.snapshot_days()), "root": str(fs.root)}
         except Exception as e:
             if settings.STRICT_INFRA:

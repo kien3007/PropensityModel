@@ -5,7 +5,6 @@ Feature store CLI.
     python -m scripts.feature_store backfill --training         # every fit/val/test cutoff of all targets
     python -m scripts.feature_store backfill --cutoffs 600,607 [--overwrite]
     python -m scripts.feature_store backfill --every 7 --start 200 --end 711
-    python -m scripts.feature_store online --households 1,2,3   # latest values from the online store
     python -m scripts.feature_store history --household 1       # PIT reads at every stored snapshot
 """
 from __future__ import annotations
@@ -46,8 +45,6 @@ def main() -> int:
     bf.add_argument("--end", type=int, default=711)
     bf.add_argument("--overwrite", action="store_true")
     bf.add_argument("--data-source", choices=["lakehouse", "csv"], default=None)
-    on = sub.add_parser("online")
-    on.add_argument("--households", required=True)
     hist = sub.add_parser("history")
     hist.add_argument("--household", type=int, required=True)
     args = parser.parse_args()
@@ -67,9 +64,6 @@ def main() -> int:
         print(f"Wrote {len(written)} snapshot(s): {written}; history now has {len(client.snapshot_days())}")
         return 0
     pd.set_option("display.width", 200)
-    if args.command == "online":
-        print(client.get_online_features([int(h) for h in args.households.split(",")]).T)
-        return 0
     rows = [client.get_historical_features([args.household], d) for d in client.snapshot_days()]
     print(pd.concat(rows, ignore_index=True).set_index("cutoff_day").T)
     return 0

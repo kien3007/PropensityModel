@@ -35,7 +35,7 @@
 - **Hiện tại:**
   - Feature view được sinh từ contract (21 `Float64` + 7 `String`). Contract chuẩn hoá mọi feature số về `float64`; trước đây cùng một feature có thể là `int64` hoặc `float64` tuỳ dữ liệu.
   - Mỗi cutoff một snapshot, ghi thêm vào kho lịch sử một cách atomic.
-  - Online store luôn giữ snapshot mới nhất. TTL 7 ngày: dữ liệu quá hạn thì báo lỗi, không âm thầm dùng.
+  - Không dùng online store (serving dùng điểm batch trong Redis). TTL 7 ngày: dữ liệu quá hạn thì báo lỗi, không âm thầm dùng.
   - Registry được đăng ký từ code; thư mục `feature_repo/` đã xoá.
   - Batch ghi snapshot mỗi lần chạy. Training mặc định đọc qua join point-in-time và tự backfill cutoff còn thiếu.
   - CLI `scripts.feature_store`.

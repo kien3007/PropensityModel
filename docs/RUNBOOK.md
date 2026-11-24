@@ -34,9 +34,9 @@ Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc tro
 
 - **Vị trí:** `FEATURE_STORE_DIR`; trong docker là `/app/data/lakehouse/feature_store`, nằm trong volume `lakehouse_data`.
   - Kho lịch sử (offline): `offline/household_features.parquet`, mỗi cutoff một snapshot.
-  - Online store: SQLite `online_store.db`.
+  - Không có online store: serving dùng điểm batch tính sẵn trong Redis, không đọc feature trực tiếp.
   - Registry: `registry.db`, được đăng ký tự động từ code.
-- **Batch** mỗi lần chạy ghi thêm snapshot của cutoff đó và cập nhật online store. Training mặc định (`TRAINING_FEATURE_SOURCE=feast`) đọc feature bằng join point-in-time. Cutoff nào chưa có snapshot thì được tính và ghi bổ sung một lần.
+- **Batch** mỗi lần chạy ghi thêm snapshot của cutoff đó. Training mặc định (`TRAINING_FEATURE_SOURCE=feast`) đọc feature bằng join point-in-time. Cutoff nào chưa có snapshot thì được tính và ghi bổ sung một lần.
 - **Kiểm tra:** `python -m scripts.feature_store status`. Sau mỗi lần batch, ngày cutoff mới phải xuất hiện trong danh sách.
 - **Lỗi `MissingSnapshotError` ("no snapshot within 7 days")** nghĩa là feature được yêu cầu ở thời điểm cách snapshot gần nhất quá TTL. Cách xử lý:
   - Chạy `backfill --cutoffs <ngày>`, hoặc chạy lại batch.
