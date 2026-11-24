@@ -15,7 +15,6 @@ htmlcov
 # Data never goes into images: raw CSVs are mounted, lakehouse/outputs live in volumes.
 data
 sample_data
-feature_repo/data
 docker/volumes
 models/history
 models/*/history

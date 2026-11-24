@@ -25,6 +25,8 @@ Cả hai đều là LightGBM trên **28 feature multi-domain** (`multidomain_v1`
 
 Mọi feature được tính **point-in-time**: chỉ dùng dữ liệu có `DAY ≤ t0`.
 
+Training đọc feature từ **Feast feature store** bằng join point-in-time, trên các snapshot mà batch hoặc backfill đã ghi theo từng cutoff. Có test chứng minh feature đọc từ store trùng khớp từng giá trị với feature tính trực tiếp. Hai champion hiện tại được tạo ra trước khi có store, nhưng train lại qua store vẫn cho đúng kết quả cũ (ΔAUC = 0).
+
 ## 2. Dữ liệu và cách chia
 
 - **Nguồn:** Dunnhumby "The Complete Journey". 2.500 hộ, 2,59 triệu dòng giao dịch, DAY 1–711. Fingerprint dữ liệu là `385c047b9baa0a81` (giống nhau khi đọc từ CSV hay từ Lakehouse).

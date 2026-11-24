@@ -1,72 +1,121 @@
 """
-Unit tests for Feast Feature Store integration.
+Feast historical feature store: append-only snapshot history, point-in-time reads that equal
+the feature builder, TTL behaviour, online store freshness, training through the store and
+the batch pipeline write path.
 """
 from __future__ import annotations
 
-import datetime
 import pandas as pd
+import pandas.testing as pdt
 import pytest
 
-from src.feature_store.client import FeastFeatureStoreClient
-
-# Needs the local Feast registry (feature_repo/data, gitignored) and real data.
-pytestmark = pytest.mark.integration
-
-
-@pytest.fixture(scope="module")
-def feast_client():
-    client = FeastFeatureStoreClient()
-    return client
+from src.config.settings import settings
+from src.feature_store.client import FeatureStoreClient, FeatureStoreSource, MissingSnapshotError
+from src.feature_store.definitions import FEATURE_VIEW_NAME, day_to_timestamp, timestamp_to_day
+from src.features.contract import CATEGORICAL_FEATURES, MODEL_FEATURES, NUMERIC_FEATURES
+from src.features.pit_extractor import MultiDomainFeatureBuilder
+from src.training.dataset_builder import DatasetBuilder
 
 
-def test_feast_feature_views_registered(feast_client):
-    views = feast_client.get_feature_view_names()
-    assert "household_features_view" in views
+@pytest.fixture
+def builder(synthetic_data):
+    return MultiDomainFeatureBuilder(synthetic_data)
 
 
-def test_feast_materialize_and_online_retrieval(feast_client, tmp_path):
-    # Materialize snapshot to Feast Online Store using cutoff 711
-    # Check if raw data exists
-    from src.config.settings import settings
-    raw_dir = settings.DATA_RAW_DIR
-    if not (raw_dir / "transaction_data.csv").exists():
-        pytest.skip("Raw Dunnhumby data not found, skipping live materialization.")
-
-    parquet_file = feast_client.materialize_snapshot(cutoff_day=711)
-    assert parquet_file.exists()
-
-    # Query online features for 3 households
-    online_features = feast_client.get_online_features(household_keys=[1, 2, 100])
-    assert "household_key" in online_features
-    assert len(online_features["household_key"]) == 3
-    # Check that key features exist in online response
-    assert "days_since_last_basket" in online_features
-    assert "spend_90d" in online_features
+@pytest.fixture
+def client(tmp_path):
+    return FeatureStoreClient(root=tmp_path / "fs")
 
 
-def test_feast_historical_point_in_time_join(feast_client):
-    from src.config.settings import settings
-    gold_parquet = settings.BASE_DIR / "data" / "lakehouse" / "gold" / "fct_household_features_snapshot.parquet"
-    if not gold_parquet.exists():
-        pytest.skip("Gold snapshot parquet not found, skipping historical PIT join.")
+def test_schema_is_generated_from_contract(client):
+    fields = {f.name: str(f.dtype) for f in client.feature_view.schema}
+    assert set(fields) == set(MODEL_FEATURES)  # Feast orders fields itself; reads are by name
+    assert {fields[c] for c in CATEGORICAL_FEATURES} == {"String"}
+    assert {fields[c] for c in NUMERIC_FEATURES} == {"Float64"}
+    assert client.feature_view.name == FEATURE_VIEW_NAME
 
-    # Entity dataframe with event timestamp matching cutoff day 711
-    base_date = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
-    event_time = base_date + datetime.timedelta(days=711)
 
-    entity_df = pd.DataFrame({
-        "household_key": [1, 2, 100],
-        "event_timestamp": [event_time, event_time, event_time],
-    })
+def test_timeline_roundtrip():
+    assert timestamp_to_day(day_to_timestamp(711)) == 711
 
-    features = [
-        "household_features_view:days_since_last_basket",
-        "household_features_view:spend_90d",
-        "household_features_view:urgency_ratio",
-    ]
 
-    hist_df = feast_client.get_historical_features(entity_df=entity_df, feature_refs=features)
-    assert len(hist_df) == 3
-    assert "days_since_last_basket" in hist_df.columns
-    assert "spend_90d" in hist_df.columns
-    assert "urgency_ratio" in hist_df.columns
+def test_snapshots_accumulate_and_replace_by_cutoff(client, builder):
+    client.backfill(builder, [120, 150])
+    client.write_snapshot(builder.features_at(180), 180)
+    assert client.snapshot_days() == [120, 150, 180]
+    # re-writing a cutoff replaces it instead of duplicating rows
+    client.write_snapshot(builder.features_at(150), 150, online=False)
+    offline = pd.read_parquet(client.offline_path)
+    assert client.snapshot_days() == [120, 150, 180]
+    assert len(offline) == 3 * len(builder.households)
+    assert not offline.duplicated(["household_key", "cutoff_day"]).any()
+    assert client.backfill(builder, [120, 150, 180]) == []  # nothing missing
+
+
+def test_point_in_time_read_equals_builder(client, builder):
+    client.backfill(builder, [120, 150, 180])
+    for cutoff in (120, 150, 180):
+        got = client.get_historical_features(builder.households, cutoff)
+        expected = builder.features_at(cutoff)
+        pdt.assert_frame_equal(got[["household_key", *MODEL_FEATURES]], expected[["household_key", *MODEL_FEATURES]])
+
+
+def test_pit_join_uses_latest_snapshot_within_ttl(client, builder):
+    client.backfill(builder, [150])
+    at_153 = client.get_historical_features(builder.households, 153)  # 3 days after the snapshot
+    pdt.assert_frame_equal(at_153[MODEL_FEATURES], builder.features_at(150)[MODEL_FEATURES].reset_index(drop=True))
+    with pytest.raises(MissingSnapshotError, match="no snapshot within 7 days"):
+        client.get_historical_features(builder.households, 165)  # snapshot is stale
+    with pytest.raises(MissingSnapshotError):
+        client.get_historical_features(builder.households, 140)  # no snapshot at or before
+
+
+def test_online_store_holds_latest_snapshot(client, builder):
+    client.write_snapshot(builder.features_at(180), 180)
+    client.write_snapshot(builder.features_at(100), 100)  # older: history only, online untouched
+    online = client.get_online_features([1, 2]).set_index("household_key")
+    latest = builder.features_at(180).set_index("household_key")
+    assert online.loc[[1, 2], "spend_90d"].tolist() == latest.loc[[1, 2], "spend_90d"].tolist()
+
+
+def test_training_through_feature_store_matches_builder(builder, small_training_config, tmp_path):
+    source = FeatureStoreSource(builder, FeatureStoreClient(root=tmp_path / "fs"))
+    via_store = DatasetBuilder(source).build_splits(small_training_config)
+    direct = DatasetBuilder(builder).build_splits(small_training_config)
+    for name in ("fit", "val", "test"):
+        pdt.assert_frame_equal(via_store[name].frame, direct[name].frame)
+    cutoffs = {*small_training_config.fit_cutoffs, *small_training_config.val_cutoffs, *small_training_config.test_cutoffs}
+    assert set(source.client.snapshot_days()) == cutoffs  # backfilled once
+
+
+def test_source_without_backfill_refuses_missing_cutoffs(builder, tmp_path):
+    source = FeatureStoreSource(builder, FeatureStoreClient(root=tmp_path / "fs"), backfill_missing=False)
+    with pytest.raises(MissingSnapshotError):
+        source.features_at(150)
+
+
+def test_train_pipeline_reads_from_feature_store(synthetic_data, small_training_config, tmp_path):
+    from src.pipelines.train_pipeline import run_training_pipeline
+
+    feast_run = run_training_pipeline(config=small_training_config, data=synthetic_data, output_dir=tmp_path / "a",
+                                      registry_dir=tmp_path / "ra", promote=False, feature_source="feast")
+    direct_run = run_training_pipeline(config=small_training_config, data=synthetic_data, output_dir=tmp_path / "b",
+                                       registry_dir=tmp_path / "rb", promote=False, feature_source="builder")
+    assert feast_run["feature_source"] == "feast" and direct_run["feature_source"] == "builder"
+    assert feast_run["test_metrics"]["roc_auc"] == pytest.approx(direct_run["test_metrics"]["roc_auc"], abs=1e-12)
+    assert FeatureStoreClient().snapshot_days()  # default store (isolated per test) was populated
+
+
+def test_batch_pipeline_appends_snapshot_and_refreshes_online(synthetic_raw_dir, synthetic_data, tmp_path):
+    from src.pipelines.batch_pipeline import run_batch_pipeline
+    from src.serving.batch_store import BatchScoreStore
+
+    summary = run_batch_pipeline(
+        cutoff_day=180, raw_data_dir=synthetic_raw_dir, data=synthetic_data, output_dir=tmp_path / "out",
+        lakehouse_path=tmp_path / "lh" / "wh.duckdb", lapse_model_path=tmp_path / "none.joblib",
+        batch_store=BatchScoreStore(redis_client=None),
+    )
+    fs = FeatureStoreClient(root=settings.FEATURE_STORE_DIR)
+    assert summary["feature_store"]["rows"] == len(synthetic_data.households)
+    assert fs.snapshot_days() == [180]
+    assert fs.get_online_features([1])["spend_90d"].notna().all()

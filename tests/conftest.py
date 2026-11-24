@@ -28,6 +28,12 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+@pytest.fixture(autouse=True)
+def isolated_feature_store(tmp_path, monkeypatch):
+    """Every test gets its own empty feature store so snapshots never leak between datasets."""
+    monkeypatch.setattr(settings, "FEATURE_STORE_DIR", tmp_path / "feature_store")
+
+
 @pytest.fixture(scope="session")
 def synthetic_tables():
     return make_raw_tables()

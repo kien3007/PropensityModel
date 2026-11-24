@@ -6,7 +6,7 @@
 #   docker compose --profile tools run --rm batch-pipeline     # one-off batch scoring
 #   python -m scripts.e2e_smoke     # full end-to-end smoke test in an isolated project
 #
-# Shared state lives in named volumes: lakehouse_data (DuckDB + Bronze Parquet),
+# Shared state lives in named volumes: lakehouse_data (DuckDB + Bronze Parquet + Feast feature store),
 # outputs_data (batch artefacts, monitoring reports) and models_data (champion registry,
 # seeded from the image on first use, so containers never write into the git checkout).
 # Raw Dunnhumby CSVs are mounted read-only from RAW_DATA_DIR.
@@ -27,6 +27,7 @@ x-app-env: &app-env
   LAKEHOUSE_PATH: /app/data/lakehouse/propensity_warehouse.duckdb
   OUTPUT_DIR: /app/data/outputs
   MODEL_PATH: /app/models/champion_model.joblib
+  FEATURE_STORE_DIR: /app/data/lakehouse/feature_store
 
 x-pipeline: &pipeline
   build:

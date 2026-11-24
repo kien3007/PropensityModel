@@ -40,6 +40,7 @@ flowchart TD
         Bronze["DuckDB Lakehouse - Bronze Parquet"]
         Loader["DataLoader -> RawDataBundle"]
         Features["MultiDomainFeatureBuilder<br/>28 point-in-time features (DAY <= t0)"]
+        FS["Feast feature store<br/>offline snapshot history + online store"]
         Train["Train pipeline<br/>LightGBM + calibration + governance gate"]
         Registry["Model registry<br/>champion / history / rollback"]
         Score["Batch scoring<br/>purchase + lapse (+ challenger)"]
@@ -66,7 +67,9 @@ flowchart TD
     end
 
     CSV --> Bronze --> Loader --> Features
-    Features --> Train --> Registry
+    Features -->|snapshot per cutoff| FS
+    FS -->|point-in-time join| Train
+    Train --> Registry
     Registry --> Score
     Features --> Score
     Score --> Gold
@@ -86,6 +89,10 @@ flowchart TD
 
 Design rules that hold everywhere:
 - **One feature contract** ([src/features/contract.py](src/features/contract.py)) and one feature code path, shared by training, batch scoring and the feature store. Parity is tested: CSV vs Lakehouse, and training rows vs batch rows.
+- **Feature store as the training source:** every batch run appends its snapshot to the Feast
+  offline history and refreshes the online store. Training reads features back through
+  point-in-time joins, and cutoffs that were never snapshotted are backfilled once. Reads from the
+  store are tested to equal recomputation. See [section 4.1](#41-feature-store).
 - **One model definition** ([src/config/model_config.py](src/config/model_config.py)): target, horizon, temporal splits, hyper-parameters and gate. Every pipeline, DAG and the scheduler read it.
 - **Self-describing bundles (schema v2):** target, feature set, horizon, cutoffs, data fingerprint and git SHA. The predictor refuses bundles that do not match the contract.
 
@@ -100,13 +107,13 @@ Design rules that hold everywhere:
 ├── docker/                   # Dockerfiles, Prometheus config + alert rules (+ promtool tests),
 │                             # Alertmanager, Grafana provisioning
 ├── docs/                     # Model card, runbook, analysis, plan, architecture, CRISP-DM archive
-├── feature_repo/             # Feast definitions (optional offline/online store)
 ├── models/                   # Tracked champions: purchase (root) and lapse/ (+ history/, ignored)
 ├── scripts/                  # reproduce_champion, registry CLI, target_analysis, load_test, e2e_smoke
 ├── src/
 │   ├── config/               # settings.py (env), model_config.py (model definition + gates)
 │   ├── data/                 # DataLoader: CSV or Lakehouse Bronze -> RawDataBundle
 │   ├── features/             # contract, point-in-time extractor, targets (purchase / lapse)
+│   ├── feature_store/        # Feast historical feature store (definitions from the contract, client)
 │   ├── training/             # dataset builder, trainer, calibrators, evaluator, statistics,
 │   │                         # champion/challenger comparison, model registry
 │   ├── models/               # predictor (bundle validation, scoring, tiers)
@@ -166,10 +173,29 @@ uvicorn src.serving.api:app --port 8000
 
 | Job | Schedule | Entry point | What it does |
 |---|---|---|---|
-| Weekly batch | Mon 02:00 UTC | `src.pipelines.batch_pipeline` | Bronze ingest, 28 PIT features, score purchase (+ challenger) and lapse, Gold + Redis batch views, CRM / retention exports, drift audit (retrain if CRITICAL) |
+| Weekly batch | Mon 02:00 UTC | `src.pipelines.batch_pipeline` | Bronze ingest, 28 PIT features (snapshot written to the feature store), score purchase (+ challenger) and lapse, Gold + Redis batch views, CRM / retention exports, drift audit (retrain if CRITICAL) |
 | Monthly retraining | 1st of month 03:00 UTC | `src.pipelines.train_pipeline` (both targets) | Train, calibrate, evaluate OOT, governance gate, atomic promotion, serving hot-reload |
 | Daily data quality | 01:00 UTC | `LakehouseEngine.run_data_quality_framework` | Row counts, negative values, household coverage |
 | Weekly feedback | Wed 04:00 UTC | `GroundTruthFeedbackLoop` | Realized AUC per target on the latest matured cutoff, fusion-rule calibration, retrain if degraded |
+
+### 4.1 Feature store
+
+| | |
+|---|---|
+| Location | `FEATURE_STORE_DIR` (default `data/feature_store`; in docker `/app/data/lakehouse/feature_store`) |
+| Offline | `offline/household_features.parquet`: one snapshot per cutoff, appended atomically (re-writing a cutoff replaces it) |
+| Online | SQLite, holds the latest snapshot (older backfills never overwrite it) |
+| Schema | Generated from the feature contract: 21 `Float64` + 7 `String`. View `household_features_multidomain_v1`, entity `household_key` |
+| Timeline | `DAY d` -> `2026-01-01 + d days` (UTC); TTL = `FEATURE_TTL_DAYS` (7). A read more than 7 days after the last snapshot fails instead of returning stale values |
+| Registry | Applied from code (`FeatureStoreClient.apply()`); no `feast apply` step |
+
+```bash
+python -m scripts.feature_store status                 # snapshots in the history
+python -m scripts.feature_store backfill --training    # all fit/val/test cutoffs of both targets
+python -m scripts.feature_store online --households 1,2
+python -m scripts.feature_store history --household 1  # PIT values at every snapshot
+python -m src.pipelines.train_pipeline --feature-source builder   # bypass the store (recompute)
+```
 
 There are two ways to run these jobs:
 - **Dependency-free scheduler** (`src/scheduler/daemon.py`, compose service `scheduler`): run a single job with `--run-job batch|retrain|dq|feedback`.
@@ -302,8 +328,8 @@ python -m scripts.e2e_smoke                # docker-compose end-to-end (nightly 
 python -m scripts.load_test                # serving latency p50/p95/p99
 ```
 
-Markers: `requires_data` (skips itself when the Dunnhumby CSVs are absent), `integration` (needs the local
-Feast registry). Pipeline tests use the synthetic Dunnhumby-shaped fixture in `tests/fixtures/`, so they
+Markers: `requires_data` (skips itself when the Dunnhumby CSVs are absent). Every test gets its own
+empty feature store. Pipeline tests use the synthetic Dunnhumby-shaped fixture in `tests/fixtures/`, so they
 run in seconds without real data.
 
 | Area | Tests |
@@ -311,7 +337,8 @@ run in seconds without real data.
 | Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_features_pit.py`, `test_lakehouse.py` |
 | Training & governance | `test_training_pipeline.py`, `test_governance.py` (gate, paired bootstrap, champion/challenger, atomic promotion, rollback), `test_targets.py` (purchase / lapse, value-ranked retention list), `test_predictor.py` (bundle validation) |
 | Serving & speed layer | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, idempotency, canary variants), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
-| Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, fusion-rule evaluation, gauges), `test_monitoring.py`, `test_scheduler.py`, `test_feature_store.py` |
+| Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, online freshness, training and batch through the store) |
+| Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, fusion-rule evaluation, gauges), `test_monitoring.py`, `test_scheduler.py` |
 | Alerting | `docker/prometheus/alert_rules_test.yml` (`promtool test rules`, in CI) |
 
 ---

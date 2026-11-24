@@ -30,6 +30,21 @@
 
 > **Quyết định 2026-11-23:** chỉ dùng LightGBM. Pipeline và báo cáo không còn train hay so sánh với các baseline (logistic regression, luật heuristic, chọn ngẫu nhiên). Các con số baseline trong ghi chú Phase 1–3 bên dưới chỉ là số liệu lịch sử. Gate vẫn giữ phần so sánh model mới với champion đang chạy (cùng là LightGBM) trước khi promote.
 
+### Bổ sung: Feast làm kho lịch sử feature (hướng B)
+- **Trước đây** Feast không được pipeline nào gọi tới. Mỗi lần materialize lại ghi đè snapshot, nên không có lịch sử. Kiểu dữ liệu trong Feast lệch với contract, registry phải tạo tay bằng `feast apply`, và đường dẫn bị cố định theo thư mục repo.
+- **Hiện tại:**
+  - Feature view được sinh từ contract (21 `Float64` + 7 `String`). Contract chuẩn hoá mọi feature số về `float64`; trước đây cùng một feature có thể là `int64` hoặc `float64` tuỳ dữ liệu.
+  - Mỗi cutoff một snapshot, ghi thêm vào kho lịch sử một cách atomic.
+  - Online store luôn giữ snapshot mới nhất. TTL 7 ngày: dữ liệu quá hạn thì báo lỗi, không âm thầm dùng.
+  - Registry được đăng ký từ code; thư mục `feature_repo/` đã xoá.
+  - Batch ghi snapshot mỗi lần chạy. Training mặc định đọc qua join point-in-time và tự backfill cutoff còn thiếu.
+  - CLI `scripts.feature_store`.
+- **Kiểm chứng:**
+  - Đọc từ store và tính trực tiếp cho kết quả giống hệt nhau (có test).
+  - Train qua Feast cho AUC 0,8593, giống hệt khi tính trực tiếp; mất 20s so với 10s.
+  - Cả hai champion vẫn tái lập được (ΔAUC = 0).
+  - Smoke test e2e 15/15 với dữ liệu thật.
+
 ### Phase 0: đã xong
 - CI: [.github/workflows/ci.yml](../.github/workflows/ci.yml) chạy `ruff` (bộ rule ghim trong `pyproject.toml`) và `pytest -m "not integration"` kèm coverage.
 - Marker `slow`, `requires_data` (tự skip khi thiếu CSV thật) và `integration`.

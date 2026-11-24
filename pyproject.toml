@@ -49,7 +49,7 @@ pythonpath = ["."]
 markers = [
     "slow: long-running tests (deselect with '-m \"not slow\"')",
     "requires_data: needs the real Dunnhumby CSVs under settings.DATA_RAW_DIR",
-    "integration: needs live infrastructure (Redis / Kafka / Feast registry)",
+    "integration: needs live infrastructure (Redis / Kafka)",
 ]
 
 [tool.coverage.run]

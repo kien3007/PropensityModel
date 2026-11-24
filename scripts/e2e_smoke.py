@@ -4,8 +4,8 @@ End-to-end smoke test of the docker-compose stack (Phase 6).
 Brings the stack up in an isolated compose project with throw-away secrets and
 non-default host ports, then checks the whole Lambda loop:
 
-  build images -> services healthy -> batch scoring (ingest Bronze, score, publish to Redis)
-  -> training (no promotion) -> ground-truth feedback -> API /ready + prediction from the
+  build images -> services healthy -> batch scoring (ingest Bronze, score, publish to Redis,
+  feature snapshot) -> training from the Feast feature store (no promotion) -> ground-truth feedback -> API /ready + prediction from the
   Redis batch view -> speed event through Kafka -> consumer -> fused score changes
   -> /metrics exposes monitoring gauges -> Prometheus scrapes both targets, alert rules
   loaded -> Alertmanager ready -> tear down.
@@ -147,8 +147,11 @@ def main() -> int:
 
         batch = pipeline("python", "-m", "src.pipelines.batch_pipeline", "--cutoff", "711")
         check.record("batch scoring (Bronze ingest + score + Redis publish)", batch.returncode == 0)
-        train = pipeline("python", "-m", "src.pipelines.train_pipeline", "--no-promote")
-        check.record("training pipeline (no promotion)", train.returncode == 0)
+        fs_status = pipeline("python", "-m", "scripts.feature_store", "status")
+        check.record("feature store holds the batch snapshot", fs_status.returncode == 0 and "711" in fs_status.stdout,
+                     next((ln for ln in fs_status.stdout.splitlines() if ln.startswith("Snapshots")), ""))
+        train = pipeline("python", "-m", "src.pipelines.train_pipeline", "--no-promote", "--feature-source", "feast")
+        check.record("training from the feature store (PIT reads + backfill, no promotion)", train.returncode == 0)
         feedback = pipeline("python", "-m", "src.scheduler.daemon", "--run-job", "feedback")
         check.record("ground-truth feedback job", feedback.returncode == 0)
 
