@@ -1,6 +1,9 @@
 # Kiến trúc hệ thống
 
-Đọc từ trên xuống: sơ đồ 1 là bức tranh tổng thể; các sơ đồ 2–5 đi vào từng luồng.
+![Kiến trúc nền tảng propensity](platform_architecture.png)
+
+Ảnh trên là toàn cảnh nền tảng: luồng dữ liệu từ trái sang phải, bao quanh là vận hành, quản trị và bảo mật.
+Các sơ đồ bên dưới đọc từ trên xuống: sơ đồ 1 là bức tranh tổng thể; các sơ đồ 2–5 đi vào từng luồng.
 Mỗi sơ đồ chỉ trả lời một câu hỏi.
 
 ## 1. Tổng quan: hệ thống gồm những khối nào?

@@ -27,6 +27,8 @@ Documentation:
 
 ## 1. Architecture
 
+![Platform architecture](docs/architecture/platform_architecture.png)
+
 ```mermaid
 flowchart TD
     subgraph Sources["Sources"]
