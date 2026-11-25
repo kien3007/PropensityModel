@@ -278,13 +278,13 @@ curl -X POST -H "X-API-Key: $SERVING_API_KEY" http://localhost:8000/v1/models/re
 
 ### Load test
 `python -m scripts.load_test` starts uvicorn, waits for `/ready` and reports p50 / p95 / p99. The Phase 4
-target is predict p99 < 50 ms. Measured locally with one worker, the memory backend and the client on the
-same machine:
+target is predict p99 < 50 ms. Measured locally (Windows) with one worker, the memory backend and the client on
+the same machine; the predict endpoint is `async`, so requests skip the threadpool hop:
 
-| Concurrency | p50 | p95 | p99 |
-|---|---|---|---|
-| 16 | 26.2 ms | 42.3 ms | 47.3 ms |
-| 4 | 8.5 ms | 30.6 ms | 31.9 ms |
+| Concurrency | Throughput | p50 | p95 | p99 |
+|---|---|---|---|---|
+| 16 | 1,123 req/s | 12.5 ms | 27.2 ms | 31.2 ms |
+| 4 | – | 11.5 ms | 27.7 ms | 29.3 ms |
 
 ---
 
@@ -306,7 +306,7 @@ run in seconds without real data.
 |---|---|
 | Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_lakehouse.py` |
 | Training & governance | `test_training_pipeline.py`, `test_governance.py` (gate, paired bootstrap, champion/challenger, atomic promotion, rollback), `test_targets.py` (purchase / lapse, value-ranked retention list), `test_predictor.py` (bundle validation) |
-| Serving | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, canary variants, streaming endpoint removed), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
+| Serving | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, canary variants, streaming endpoint removed), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py` |
 | Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, training and batch through the store), `test_feature_quality.py` (each quality check, store refuses and batch stops on a bad snapshot), `test_feature_store_observability.py` (Evidently profile, injected shift detected, trends, gauges, profiling never blocks the batch) |
 | Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, gauges), `test_monitoring.py`, `test_scheduler.py` |
 | Alerting | `docker/prometheus/alert_rules_test.yml` (`promtool test rules`, in CI) |
@@ -332,7 +332,8 @@ Storage and compute are decoupled, so the stack can move to GCP or AWS component
   purchase households would mostly buy anyway.
 - **Scores refresh weekly.** A household that bought today keeps its score until the next batch; suppress
   recent buyers in the campaign tool if that matters.
-- **Rate limiting is per process.** Enforce a global limit at the gateway.
+- **Rate limiting is per container.** Each serving container runs one worker so that metrics and limits are
+  exact; with several containers, enforce a global limit at the gateway.
 
 ---
 

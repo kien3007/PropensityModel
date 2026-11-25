@@ -79,6 +79,7 @@ class RateLimiter:
 rate_limiter = RateLimiter()
 
 
-def rate_limit(request: Request) -> None:
+async def rate_limit(request: Request) -> None:
+    # async: runs on the event loop (no threadpool hop); the check is an in-memory counter.
     client = request.client.host if request.client else "unknown"
     rate_limiter.check(f"{client}:{request.url.path}", settings.RATE_LIMIT_PER_MINUTE)

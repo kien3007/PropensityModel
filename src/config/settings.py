@@ -55,7 +55,6 @@ class Settings(BaseSettings):
     CHALLENGER_MODEL_PATH: Optional[Path] = None
 
     # Monitoring & automated retraining triggers.
-    DRIFT_PSI_ALERT: float = 0.20          # Prometheus early-warning threshold per feature
     REALIZED_AUC_DROP_ALERT: float = 0.05  # expected (test) AUC - realized AUC that counts as degraded
     AUTO_RETRAIN_ON_DEGRADATION: bool = True
 
