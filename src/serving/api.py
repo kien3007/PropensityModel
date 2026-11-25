@@ -108,8 +108,10 @@ def readiness(response: Response) -> Dict[str, Any]:
 
 
 @app.post("/v1/predict/propensity", response_model=PropensityResponse, dependencies=[Depends(rate_limit)])
-def predict_propensity(req: PredictRequest) -> Dict[str, Any]:
+async def predict_propensity(req: PredictRequest) -> Dict[str, Any]:
     """Propensity from the batch view of the routed variant (cold start when unknown)."""
+    # async on purpose: the work is one in-memory lookup or one or two sub-millisecond Redis reads,
+    # cheaper than handing every request to the threadpool (the dominant cost when it was sync).
     start_t = time.perf_counter()
     try:
         result = scoring_service.get_propensity(req.household_key)

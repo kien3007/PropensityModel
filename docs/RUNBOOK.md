@@ -127,8 +127,8 @@ curl -X POST -H "X-API-Key: $KEY" http://localhost:8000/v1/models/reload
 3. `prediction_source = "replay"` nghĩa là dự đoán được chấm lại chứ không lấy từ bảng Gold. Hãy kiểm tra xem batch của cutoff đó có thực sự đã chạy không.
 
 ### `PropensityPredictLatencyP99High` (warning): p99 > 50 ms
-- Kiểm tra số worker (`--workers` trong `Dockerfile.serving`) và độ trễ của Redis.
-- Load test: `python -m scripts.load_test`. Mốc tham chiếu: p99 khoảng 47 ms với 1 worker và 16 request đồng thời.
+- Kiểm tra độ trễ của Redis. Mỗi container chỉ chạy 1 worker (để metric và rate limit đúng); cần thêm năng lực thì tăng số container `serving-api`, không tăng `--workers`.
+- Load test: `python -m scripts.load_test`. Mốc tham chiếu (1 worker, 16 request đồng thời, đo trên Windows): p99 khoảng 31 ms, khoảng 1.100 request/giây.
 
 ### `PropensityServingDown`
 - `docker compose ps serving-api` và `docker compose logs serving-api`.
@@ -155,5 +155,5 @@ curl -X POST -H "X-API-Key: $KEY" http://localhost:8000/v1/models/reload
 
 ## 7. Giới hạn đã biết
 
-- Rate limit chỉ đếm trong từng tiến trình, mỗi worker giữ bộ đếm riêng. Cần giới hạn chung thì đặt ở gateway.
+- Rate limit đếm theo từng container (mỗi container 1 worker). Chạy nhiều container thì mỗi container có bộ đếm riêng; cần giới hạn chung thì đặt ở gateway.
 - Điểm chỉ cập nhật mỗi tuần. Khách vừa mua hôm nay vẫn giữ điểm cũ đến lần batch sau; nếu cần, loại khách vừa mua ngay trong công cụ chạy chiến dịch.

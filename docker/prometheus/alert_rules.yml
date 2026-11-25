@@ -1,5 +1,6 @@
 # Propensity platform alerts (loaded by Prometheus, routed by Alertmanager).
-# Thresholds mirror src/config/settings.py: DRIFT_PSI_ALERT=0.20, REALIZED_AUC_DROP_ALERT=0.05.
+# Thresholds live here. REALIZED_AUC_DROP_ALERT (0.05) must match src/config/settings.py, which the
+# feedback job uses to decide retraining (tests/test_deploy_config.py checks they agree).
 groups:
   - name: propensity-model-quality
     rules:
