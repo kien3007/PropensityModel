@@ -73,6 +73,20 @@ def test_bootstrap_from_latest_batch_manifest(tmp_path):
     assert store.bootstrap_from_outputs(tmp_path) is False  # never overwrites a populated store
 
 
+@pytest.mark.parametrize("recorded_dir,sep", [(r"C:\Users\someone\outputs", "\\"), ("/srv/old/outputs", "/")])
+def test_bootstrap_finds_artifacts_after_the_outputs_moved(tmp_path, recorded_dir, sep):
+    """Manifests store absolute paths from the batch host; a moved outputs dir must still load."""
+    _scores(4, 0.4).to_parquet(tmp_path / "household_scores_day_711.parquet")
+    (tmp_path / "batch_manifest_day_711.json").write_text(json.dumps({
+        "run_id": "B1", "cutoff_day": 711, "model_bundle": "champ",
+        "artifacts": {"parquet": recorded_dir + sep + "household_scores_day_711.parquet",
+                      "challenger_parquet": recorded_dir + sep + "missing.parquet"},
+    }), encoding="utf-8")
+    store = BatchScoreStore(redis_client=None)
+    assert store.bootstrap_from_outputs(tmp_path) is True
+    assert store.count("champion") == 4 and store.count("challenger") == 0
+
+
 def test_strict_infra_fails_fast(monkeypatch):
     monkeypatch.setattr(settings, "STRICT_INFRA", True)
     monkeypatch.setattr(settings, "REDIS_PORT", 1)  # nothing listens there

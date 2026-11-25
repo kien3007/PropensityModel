@@ -17,7 +17,7 @@ import datetime
 import json
 import logging
 import uuid
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -42,6 +42,20 @@ def _meta_key(variant: str) -> str:
 def _check_variant(variant: str) -> None:
     if variant not in VARIANTS:
         raise ValueError(f"Unknown variant '{variant}'; expected one of {VARIANTS}")
+
+
+def _resolve_artifact(recorded: Optional[str], output_dir: Path) -> Optional[Path]:
+    """
+    The manifest records absolute paths from the machine that ran the batch. When the outputs
+    directory was moved (volume restore, container mount, another host), fall back to the file
+    of the same name next to the manifest. PureWindowsPath splits on both separators.
+    """
+    if not recorded:
+        return None
+    if Path(recorded).exists():
+        return Path(recorded)
+    local = output_dir / PureWindowsPath(recorded).name
+    return local if local.exists() else None
 
 
 class BatchScoreStore:
@@ -135,8 +149,8 @@ class BatchScoreStore:
         artifacts = manifest.get("artifacts", {})
         loaded = False
         for variant, key in (("champion", "parquet"), ("challenger", "challenger_parquet")):
-            path = artifacts.get(key)
-            if path and Path(path).exists():
+            path = _resolve_artifact(artifacts.get(key), Path(output_dir))
+            if path is not None:
                 meta = {"run_id": manifest.get("run_id"), "snapshot_day": manifest.get("cutoff_day"),
                         "model_bundle": manifest.get("model_bundle" if variant == "champion" else "challenger_bundle"),
                         "source": "bootstrap"}

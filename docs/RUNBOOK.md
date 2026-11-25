@@ -128,7 +128,7 @@ curl -X POST -H "X-API-Key: $KEY" http://localhost:8000/v1/models/reload
 
 ### `PropensityPredictLatencyP99High` (warning): p99 > 50 ms
 - Kiểm tra độ trễ của Redis. Mỗi container chỉ chạy 1 worker (để metric và rate limit đúng); cần thêm năng lực thì tăng số container `serving-api`, không tăng `--workers`.
-- Load test: `python -m scripts.load_test`. Mốc tham chiếu (1 worker, 16 request đồng thời, đo trên Windows): p99 khoảng 31 ms, khoảng 1.100 request/giây.
+- Load test: `python -m scripts.load_test`. Mốc tham chiếu (1 worker, 16 request đồng thời, trong container Linux): p99 khoảng 28 ms, khoảng 1.100 request/giây.
 
 ### `PropensityServingDown`
 - `docker compose ps serving-api` và `docker compose logs serving-api`.
