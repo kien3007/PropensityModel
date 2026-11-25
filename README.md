@@ -278,13 +278,16 @@ curl -X POST -H "X-API-Key: $SERVING_API_KEY" http://localhost:8000/v1/models/re
 
 ### Load test
 `python -m scripts.load_test` starts uvicorn, waits for `/ready` and reports p50 / p95 / p99. The Phase 4
-target is predict p99 < 50 ms. Measured locally (Windows) with one worker, the memory backend and the client on
-the same machine; the predict endpoint is `async`, so requests skip the threadpool hop:
+target is predict p99 < 50 ms. Measured in the pipeline image (Linux container) with one worker, the memory
+backend and the client in the same container; the predict endpoint is `async`, so requests skip the
+threadpool hop:
 
 | Concurrency | Throughput | p50 | p95 | p99 |
 |---|---|---|---|---|
-| 16 | 1,123 req/s | 12.5 ms | 27.2 ms | 31.2 ms |
-| 4 | – | 11.5 ms | 27.7 ms | 29.3 ms |
+| 16 | 1,119 req/s | 13.5 ms | 21.4 ms | 27.8 ms |
+| 4 | 1,268 req/s | 2.9 ms | 4.0 ms | 4.8 ms |
+
+On Windows hosts latency is higher (timer resolution ~15 ms): about 31 ms p99 at concurrency 16.
 
 ---
 
