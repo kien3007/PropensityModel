@@ -89,16 +89,6 @@ def task_execute_batch_scoring(cutoff_day: int = 711, **kwargs) -> Dict[str, Any
     return summary
 
 
-def task_sync_serving_cache(**kwargs) -> None:
-    """Warms Redis speed layer cache and resets intraday delta streams."""
-    from src.speed_layer.delta_stream import SpeedLayerProcessor
-
-    logger.info("Resetting intraday delta streams for fresh weekly scoring cycle...")
-    processor = SpeedLayerProcessor()
-    cleared = processor.reset_intraday_deltas()
-    logger.info(f"Speed layer state initialized. Intraday deltas reset ({cleared} entries cleared).")
-
-
 with DAG(
     dag_id="weekly_batch_propensity_scoring",
     default_args=default_args,
@@ -107,7 +97,7 @@ with DAG(
     start_date=datetime.datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
-    tags=["propensity", "batch-scoring", "lakehouse", "lambda-architecture"],
+    tags=["propensity", "batch-scoring", "lakehouse", "batch-serving"],
 ) as dag:
 
     dq_check = PythonOperator(
@@ -121,9 +111,4 @@ with DAG(
         op_kwargs={"cutoff_day": 711},
     )
 
-    serving_sync = PythonOperator(
-        task_id="sync_serving_cache",
-        python_callable=task_sync_serving_cache,
-    )
-
-    dq_check >> batch_scoring >> serving_sync
+    dq_check >> batch_scoring

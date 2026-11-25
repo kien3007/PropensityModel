@@ -1,8 +1,8 @@
 # ==============================================================================
-# Propensity platform - on-premise Lambda stack.
+# Propensity platform - on-premise batch scoring stack.
 #
 #   cp .env.example .env            # fill in the secrets (compose refuses to start without them)
-#   docker compose up -d --build    # serving + speed layer + scheduler + observability
+#   docker compose up -d --build    # serving + scheduler + observability
 #   docker compose --profile tools run --rm batch-pipeline     # one-off batch scoring
 #   python -m scripts.e2e_smoke     # full end-to-end smoke test in an isolated project
 #
@@ -17,8 +17,6 @@ x-app-env: &app-env
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   REDIS_HOST: redis
   REDIS_PORT: "6379"
-  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-  KAFKA_ENABLED: "true"
   STRICT_INFRA: ${STRICT_INFRA:-true}
   SERVING_API_KEYS: ${SERVING_API_KEYS:?set SERVING_API_KEYS in .env}
   DATA_RAW_DIR: /app/sample_data/dunnhumby
@@ -56,36 +54,7 @@ services:
       timeout: 3s
       retries: 10
 
-  kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    restart: unless-stopped
-    ports:
-      - "${KAFKA_HOST_PORT:-9092}:9092"
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092}"
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_PROCESS_ROLES: "broker,controller"
-      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
-      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092"
-      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
-      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
-    volumes:
-      - kafka_data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 10s
-      retries: 12
-      start_period: 20s
-
-  # ---------------------------------------------------------------- serving & speed layer
+  # ---------------------------------------------------------------- serving
   serving-api:
     build:
       context: .
@@ -95,8 +64,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
     environment:
       <<: *app-env
     ports:
@@ -105,27 +72,6 @@ services:
       - models_data:/app/models
       - outputs_data:/app/data/outputs
     # Liveness is the image HEALTHCHECK (/health); readiness (/ready) waits for batch views.
-
-  kafka-consumer:
-    <<: *pipeline
-    restart: unless-stopped
-    command: ["python", "-m", "src.speed_layer.kafka_bus", "--mode", "consumer"]
-    depends_on:
-      redis:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    environment:
-      <<: *app-env
-      CONSUMER_METRICS_PORT: "9101"
-    expose:
-      - "9101"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9101/metrics', timeout=3)"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
 
   # ---------------------------------------------------------------- batch & orchestration
   batch-pipeline:
@@ -207,7 +153,6 @@ services:
 
 volumes:
   redis_data:
-  kafka_data:
   lakehouse_data:
   outputs_data:
   models_data:

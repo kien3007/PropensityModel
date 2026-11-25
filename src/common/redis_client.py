@@ -1,5 +1,5 @@
 """
-Shared Redis connection factory for the speed layer and the serving batch store.
+Shared Redis connection factory for the serving batch store and monitoring state.
 
 Probes once with retries disabled (redis-py's default retry policy otherwise stalls ~25s
 on an unreachable server). Returns None when Redis is unavailable so callers can use an

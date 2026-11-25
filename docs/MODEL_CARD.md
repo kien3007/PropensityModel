@@ -110,7 +110,7 @@ Ngưỡng của lapse được chốt *trước* khi train model lapse đầu ti
   - `DAY` không ánh xạ được về ngày lịch thật, nên không mô hình hoá được mùa vụ.
   - Ngày 278 và 643 có dữ liệu bất thường (đã ghi nhận ở phần EDA lưu trữ).
 - **Demographic** chỉ có cho 801 trên 2.500 hộ; các hộ còn lại nhận giá trị `UNKNOWN`. Model có dùng demographic, nên cần lưu ý về công bằng khi dùng điểm số để phân bổ ưu đãi.
-- **Luật fusion của speed layer** (×0,25, +0,15, +0,05) là heuristic, chưa được hiệu chỉnh: Dunnhumby không có sự kiện trong ngày (intraday) thật.
+- **Điểm cập nhật mỗi tuần.** API trả đúng điểm batch của champion, không điều chỉnh theo sự kiện trong ngày.
 - **Lapse:** định nghĩa "hộ mua đều đặn" và ngưỡng 21 ngày là quyết định nghiệp vụ, chưa được kiểm chứng bằng hành vi rời bỏ dài hạn.
 
 ## 8. Truy vết

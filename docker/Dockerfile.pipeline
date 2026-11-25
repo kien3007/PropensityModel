@@ -1,5 +1,5 @@
 # ==============================================================================
-# Batch / training / scheduler / Kafka-consumer image. Raw Dunnhumby CSVs are mounted
+# Batch / training / scheduler image. Raw Dunnhumby CSVs are mounted
 # read-only at /app/sample_data/dunnhumby at run time (RAW_DATA_DIR in .env), never baked in.
 # ==============================================================================
 FROM python:3.10-slim

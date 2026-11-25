@@ -1,6 +1,6 @@
 # ==============================================================================
 # Serving gateway (FastAPI). Raw data is NOT baked in: the API only needs the model
-# registry (/app/models, a shared volume) and Redis for batch views / speed deltas.
+# registry (/app/models, a shared volume) and Redis for batch views.
 # ==============================================================================
 FROM python:3.10-slim AS builder
 

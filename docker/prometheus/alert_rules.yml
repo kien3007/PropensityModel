@@ -94,14 +94,3 @@ groups:
           severity: critical
         annotations:
           summary: "Serving API is not being scraped"
-
-  - name: propensity-speed-layer
-    rules:
-      - alert: PropensityKafkaConsumerLagHigh
-        expr: propensity_speed_consumer_lag > 1000
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Speed-layer consumer is {{ $value }} events behind"
-          description: "Intraday deltas are stale; fusion rules act on old information."

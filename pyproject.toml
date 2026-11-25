@@ -26,7 +26,6 @@ dependencies = [
     "feast>=0.67.0",
     "scipy>=1.11.0",
     "prometheus_client>=0.20.0",
-    "kafka-python-ng>=2.2.0",
 ]
 
 [project.optional-dependencies]
@@ -51,7 +50,7 @@ pythonpath = ["."]
 markers = [
     "slow: long-running tests (deselect with '-m \"not slow\"')",
     "requires_data: needs the real Dunnhumby CSVs under settings.DATA_RAW_DIR",
-    "integration: needs live infrastructure (Redis / Kafka)",
+    "integration: needs live infrastructure (Redis)",
 ]
 
 [tool.coverage.run]

@@ -1,5 +1,5 @@
 """
-Ground-truth feedback, retraining policy, drift-triggered retraining, fusion-rule evaluation
+Ground-truth feedback, retraining policy, drift-triggered retraining
 and cross-process monitoring gauges.
 """
 from __future__ import annotations
@@ -141,22 +141,6 @@ def test_simulated_drift_is_critical_and_retrains(synthetic_champion, synthetic_
 def test_no_retraining_when_healthy():
     assert decide_retraining(drift_report={"requires_retraining": False},
                              feedback_reports=[{"degraded": False}])["retrain"] is False
-
-
-def test_fusion_rule_evaluation(loop, synthetic_data, synthetic_champion):
-    cutoff = 150
-    labels = MultiDomainFeatureBuilder(synthetic_data).labels_at(cutoff, 7)
-    buyers = labels.loc[labels["target"] == 1, "household_key"].tolist()[:10]
-    rows = [{"served_at": i, "household_key": hh, "batch_snapshot_day": cutoff, "batch_probability": 0.8,
-             "unified_probability": 0.2, "rules": ["intraday_purchase_dampening"]} for i, hh in enumerate(buyers)]
-    rows += [{"served_at": 100, "household_key": buyers[0], "batch_snapshot_day": cutoff + 1000,
-              "batch_probability": 0.5, "unified_probability": 0.5, "rules": []}]  # not matured: dropped
-    result = loop.evaluate_fusion_rules(pd.DataFrame(rows), horizon_days=7)
-    rule = result["rules"]["intraday_purchase_dampening"]
-    assert rule["n"] == 10 and rule["realized_rate"] == 1.0
-    assert rule["rule_improves_calibration"] is False       # these households bought anyway
-    assert rule["implied_dampening_factor"] == pytest.approx(1.25)
-    assert loop.state.latest("fusion_rules")["rows"] == 10
 
 
 def test_metrics_endpoint_exposes_cross_process_monitoring(tmp_path, monkeypatch):

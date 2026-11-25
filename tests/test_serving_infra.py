@@ -1,7 +1,7 @@
 """
 Serving infrastructure: Redis-backed batch store (atomic snapshot swap), bootstrap from batch
-artefacts, idempotent speed layer on Redis, STRICT_INFRA fail-fast, canary contract checks and
-challenger scoring in the batch pipeline.
+artefacts, STRICT_INFRA fail-fast, canary contract checks and challenger scoring in the batch
+pipeline.
 """
 import json
 
@@ -15,9 +15,6 @@ from src.config.settings import settings
 from src.models.predictor import PropensityPredictor
 from src.serving.batch_store import BatchScoreStore
 from src.serving.canary_router import CanaryRouter
-from src.speed_layer import delta_stream
-from src.speed_layer.delta_stream import SpeedLayerProcessor
-from src.speed_layer.kafka_bus import KafkaEventProducer
 
 
 def _scores(n=5, p=0.5):
@@ -76,27 +73,11 @@ def test_bootstrap_from_latest_batch_manifest(tmp_path):
     assert store.bootstrap_from_outputs(tmp_path) is False  # never overwrites a populated store
 
 
-def test_speed_layer_on_redis_is_idempotent(fake_redis, monkeypatch):
-    monkeypatch.setattr(delta_stream, "connect_redis", lambda component: fake_redis)
-    speed = SpeedLayerProcessor()
-    assert speed.backend == "redis"
-    event = {"household_key": 9, "event_type": "coupon_clip", "event_id": "e-1"}
-    speed.process_event(event)
-    again = speed.process_event(event)
-    assert again["duplicate"] is True and again["intraday_coupons_clipped"] == 1
-    assert speed.active_delta_count() == 1
-    speed.reset_intraday_deltas()
-    assert speed.active_delta_count() == 0
-    assert fake_redis.exists("realtime:seen:e-1")  # dedup marker survives the delta reset
-
-
 def test_strict_infra_fails_fast(monkeypatch):
     monkeypatch.setattr(settings, "STRICT_INFRA", True)
     monkeypatch.setattr(settings, "REDIS_PORT", 1)  # nothing listens there
     with pytest.raises(InfrastructureUnavailable, match="Redis"):
         connect_redis("test")
-    with pytest.raises(InfrastructureUnavailable, match="Kafka"):
-        KafkaEventProducer(bootstrap_servers="127.0.0.1:1", enabled=True, fallback_processor=object())
 
 
 def test_non_strict_falls_back(monkeypatch):

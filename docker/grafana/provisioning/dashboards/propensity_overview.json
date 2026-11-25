@@ -276,14 +276,14 @@
         "y": 14
       },
       "id": 102,
-      "title": "Business Decisions & Lambda Fusion Rules",
+      "title": "Business Decisions",
       "type": "row"
     },
     {
       "datasource": "Prometheus",
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 15
       },
@@ -302,27 +302,8 @@
       "datasource": "Prometheus",
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 15
-      },
-      "id": 8,
-      "title": "Applied Fusion Rules (Cooldown vs Surge vs Nudge)",
-      "type": "barchart",
-      "targets": [
-        {
-          "expr": "sum(propensity_fusion_rules_total) by (rule_name)",
-          "legendFormat": "{{rule_name}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": "Prometheus",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
+        "w": 12,
+        "x": 12,
         "y": 15
       },
       "id": 9,
@@ -511,7 +492,7 @@
       "datasource": "Prometheus",
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 33
       },
@@ -530,39 +511,14 @@
       "options": {}
     },
     {
-      "id": 109,
-      "title": "Speed-layer consumer lag",
-      "type": "timeseries",
-      "datasource": "Prometheus",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 33
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "propensity_speed_consumer_lag",
-          "legendFormat": "lag",
-          "datasource": "Prometheus"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
       "id": 110,
       "title": "Prediction distribution drift (PSI)",
       "type": "timeseries",
       "datasource": "Prometheus",
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
+        "w": 12,
+        "x": 12,
         "y": 33
       },
       "targets": [
