@@ -99,21 +99,17 @@ def test_prometheus_metrics_and_endpoint():
     res = client.post("/v1/predict/propensity", json={"household_key": 100})
     assert res.status_code == 200
 
-    # 2. Trigger speed event
-    event_res = client.post("/v1/speed/event", json={"household_key": 100, "event_type": "coupon_clip"})
-    assert event_res.status_code == 202
-
-    # 3. Record drift metric
+    # 2. Record drift metric
     record_drift_metrics({"spend_90d": 0.18, "days_since_last_basket": 0.05})
 
-    # 4. Scrape /metrics endpoint
+    # 3. Scrape /metrics endpoint
     metrics_res = client.get("/metrics")
     assert metrics_res.status_code == 200
     metrics_text = metrics_res.text
 
     assert "propensity_requests_total" in metrics_text
     assert "propensity_prediction_latency_seconds_bucket" in metrics_text
-    assert "propensity_unified_score_bucket" in metrics_text
+    assert "propensity_served_score_bucket" in metrics_text
     assert "propensity_decile_total" in metrics_text
     assert "propensity_urgency_tier_total" in metrics_text
     assert "propensity_feature_drift_psi" in metrics_text

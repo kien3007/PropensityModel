@@ -229,12 +229,6 @@ class MLSystemScheduler:
                 reports[target] = loop.evaluate_realized_performance(target=target)
             except (FileNotFoundError, ValueError) as e:
                 logger.warning(f"Feedback for target '{target}' skipped: {e}")
-        try:  # fusion heuristics vs realized outcomes, from the API's served-prediction log
-            from src.monitoring.prediction_log import PredictionLog
-
-            reports["fusion_rules"] = loop.evaluate_fusion_rules(PredictionLog().to_frame())
-        except Exception as e:
-            logger.warning(f"Fusion-rule evaluation skipped: {e}")
         reports["retraining_decision"] = self._maybe_retrain(
             decide_retraining(feedback_reports=[r for k, r in reports.items() if k in TRAINING_CONFIGS])
         )

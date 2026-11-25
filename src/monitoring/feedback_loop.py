@@ -13,7 +13,6 @@ accepted with (its out-of-time test metrics):
 - degraded = expected AUC - realized AUC > settings.REALIZED_AUC_DROP_ALERT.
 
 Results go to Gold `fct_model_attribution`, a JSON report, and MonitoringState (-> Prometheus).
-`evaluate_fusion_rules` checks the serving-layer heuristics against realized outcomes.
 """
 from __future__ import annotations
 
@@ -204,48 +203,4 @@ class GroundTruthFeedbackLoop:
         log = logger.warning if degraded else logger.info
         log(f"Feedback {target}@{cutoff} ({source}): realized AUC {m['roc_auc']:.4f} vs accepted {expected:.4f} "
             f"(drop {auc_drop:+.4f}) -> {result['attribution_status']}")
-        return result
-
-    def evaluate_fusion_rules(self, prediction_log: pd.DataFrame, horizon_days: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Compares each fusion rule's adjusted probability with the realized purchase rate of the
-        households it was applied to (anchored at the batch snapshot day of the answer).
-        Reports the coefficient the data implies, so the FUSION_* heuristics can be recalibrated.
-        """
-        if prediction_log.empty:
-            return {"evaluated": False, "reason": "empty prediction log"}
-        horizon = horizon_days or PropensityPredictor(expected_target="purchase").horizon_days
-        last_day = self.builder.last_observed_day()
-        log = prediction_log.dropna(subset=["batch_snapshot_day"]).copy()
-        log = log[log["batch_snapshot_day"] + horizon <= last_day]
-        if log.empty:
-            return {"evaluated": False, "reason": "no logged predictions with matured labels"}
-        log["rule"] = log["rules"].map(lambda r: r[0] if len(r) else "none")
-        log = log.sort_values("served_at").groupby(["household_key", "batch_snapshot_day"]).tail(1)
-
-        frames = []
-        for snapshot, grp in log.groupby("batch_snapshot_day"):
-            labels = self.builder.labels_at(int(snapshot), horizon)[["household_key", "target"]]
-            frames.append(grp.merge(labels, on="household_key", how="inner"))
-        joined = pd.concat(frames, ignore_index=True)
-
-        rules = {}
-        for rule, grp in joined.groupby("rule"):
-            realized, batch_p, unified_p = grp["target"].mean(), grp["batch_probability"].mean(), grp["unified_probability"].mean()
-            entry = {
-                "n": int(len(grp)),
-                "realized_rate": round(float(realized), 4),
-                "mean_batch_probability": round(float(batch_p), 4),
-                "mean_unified_probability": round(float(unified_p), 4),
-                "batch_abs_error": round(abs(float(batch_p - realized)), 4),
-                "unified_abs_error": round(abs(float(unified_p - realized)), 4),
-            }
-            entry["rule_improves_calibration"] = entry["unified_abs_error"] < entry["batch_abs_error"]
-            if rule == "intraday_purchase_dampening" and batch_p > 0:
-                entry["implied_dampening_factor"] = round(float(realized / batch_p), 4)
-            elif rule != "none":
-                entry["implied_additive_adjustment"] = round(float(realized - batch_p), 4)
-            rules[rule] = entry
-        result = {"evaluated": True, "horizon_days": int(horizon), "rows": int(len(joined)), "rules": rules}
-        self.state.publish("fusion_rules", result)
         return result

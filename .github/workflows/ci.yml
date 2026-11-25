@@ -14,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      # No Kafka/Redis in CI: producers and the speed layer use their in-memory fallback.
-      KAFKA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
 

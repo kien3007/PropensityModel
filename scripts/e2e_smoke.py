@@ -2,12 +2,12 @@
 End-to-end smoke test of the docker-compose stack (Phase 6).
 
 Brings the stack up in an isolated compose project with throw-away secrets and
-non-default host ports, then checks the whole Lambda loop:
+non-default host ports, then checks the whole loop:
 
   build images -> services healthy -> batch scoring (ingest Bronze, score, publish to Redis,
   feature snapshot, quality gate, Evidently profile) -> training from the Feast feature store (no promotion) -> ground-truth feedback -> API /ready + prediction from the
-  Redis batch view -> speed event through Kafka -> consumer -> fused score changes
-  -> /metrics exposes monitoring gauges -> Prometheus scrapes both targets, alert rules
+  Redis batch view -> streaming endpoint is gone -> /metrics exposes monitoring gauges
+  -> Prometheus scrapes the API, alert rules
   loaded -> Alertmanager ready -> tear down.
 
 Usage:
@@ -27,15 +27,14 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-import uuid
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = "propensity-e2e"
-PORTS = {"SERVING_HOST_PORT": 18000, "REDIS_HOST_PORT": 16379, "KAFKA_HOST_PORT": 19092,
+PORTS = {"SERVING_HOST_PORT": 18000, "REDIS_HOST_PORT": 16379,
          "PROMETHEUS_HOST_PORT": 19090, "ALERTMANAGER_HOST_PORT": 19093, "GRAFANA_HOST_PORT": 13000}
-SERVICES = ["redis", "kafka", "serving-api", "kafka-consumer", "scheduler", "alertmanager", "prometheus", "grafana"]
+SERVICES = ["redis", "serving-api", "scheduler", "alertmanager", "prometheus", "grafana"]
 
 
 class Check:
@@ -164,23 +163,9 @@ def main() -> int:
 
         status, pred = http("POST", f"{serving}/v1/predict/propensity", {"household_key": 7})
         check.record("prediction served from batch", status == 200 and pred.get("score_source") == "batch",
-                     f"p={pred.get('unified_propensity') if isinstance(pred, dict) else pred}")
-        status, _ = http("POST", f"{serving}/v1/speed/event", {"household_key": 7, "event_type": "pos_checkout"})
-        check.record("event without API key rejected", status == 401, f"HTTP {status}")
-
-        dispatched = []
-
-        def event_applied() -> bool:
-            code, res = http("POST", f"{serving}/v1/speed/event",
-                             {"household_key": 7, "event_type": "pos_checkout", "sales_value": 42.0,
-                              "event_id": uuid.uuid4().hex}, auth)
-            dispatched.append(res.get("dispatch", {}).get("dispatched_to") if isinstance(res, dict) else code)
-            _, fused = http("POST", f"{serving}/v1/predict/propensity", {"household_key": 7})
-            return "intraday_purchase_dampening" in fused.get("applied_fusion_rules", [])
-
-        applied = wait_for(event_applied, 90, interval=5)
-        check.record("speed event via Kafka -> consumer -> fused score", applied and "kafka" in dispatched,
-                     f"dispatched_to={sorted(set(map(str, dispatched)))}")
+                     f"p={pred.get('propensity') if isinstance(pred, dict) else pred}")
+        status, _ = http("POST", f"{serving}/v1/speed/event", {"household_key": 7, "event_type": "pos_checkout"}, auth)
+        check.record("streaming endpoint removed", status in (404, 405), f"HTTP {status}")
 
         status, metrics = http("GET", f"{serving}/metrics")
         check.record("/metrics exposes monitoring gauges", status == 200 and "propensity_realized_roc_auc" in metrics
@@ -191,16 +176,16 @@ def main() -> int:
         def targets_up() -> bool:
             _, t = http("GET", f"{prometheus}/api/v1/targets")
             jobs = {a["labels"]["job"]: a["health"] for a in t["data"]["activeTargets"]}
-            return jobs.get("propensity-serving-api") == "up" and jobs.get("propensity-speed-consumer") == "up"
+            return jobs.get("propensity-serving-api") == "up"
 
-        check.record("Prometheus scrapes serving + consumer", wait_for(targets_up, 90))
+        check.record("Prometheus scrapes the serving API", wait_for(targets_up, 90))
         _, rules = http("GET", f"{prometheus}/api/v1/rules")
         n_rules = sum(len(g["rules"]) for g in rules["data"]["groups"]) if isinstance(rules, dict) else 0
-        check.record("alert rules loaded", n_rules == 10, f"{n_rules} rules")
+        check.record("alert rules loaded", n_rules == 9, f"{n_rules} rules")
         check.record("Alertmanager ready", http("GET", f"{alertmanager}/-/ready")[0] == 200)
     finally:
         if not check.ok:
-            logs = run(compose + ["logs", "--tail", "40", "serving-api", "kafka-consumer"], check=False)
+            logs = run(compose + ["logs", "--tail", "40", "serving-api", "scheduler"], check=False)
             print(logs.stdout[-6000:])
         if args.keep:
             print(f"Stack left running (project {PROJECT}); env file {env_file}")

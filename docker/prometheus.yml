@@ -18,7 +18,3 @@ scrape_configs:
     static_configs:
       - targets: ["serving-api:8000"]
 
-  # Kafka consumer worker: consumer lag and applied/duplicate event counters.
-  - job_name: "propensity-speed-consumer"
-    static_configs:
-      - targets: ["kafka-consumer:9101"]

@@ -1,4 +1,4 @@
-from src.serving.fusion_engine import LambdaFusionEngine
 from src.serving.api import app
+from src.serving.scoring_service import PropensityScoringService
 
-__all__ = ["LambdaFusionEngine", "app"]
+__all__ = ["PropensityScoringService", "app"]

@@ -1,10 +1,9 @@
-# Household Purchase Propensity Platform (Lambda Architecture)
+# Household Purchase Propensity Platform
 
 End-to-end ML platform for household-level propensity scoring on Dunnhumby *"The Complete Journey"*
 (2,500 households, 2.59M transactions, DAY 1–711).
-- A **batch layer** trains and scores point-in-time models.
-- A **speed layer** applies intraday events from Kafka.
-- A **serving layer** fuses both behind an authenticated FastAPI gateway.
+- A **batch layer** trains point-in-time models and scores every household each week.
+- A **serving layer** answers from those precomputed scores behind an authenticated FastAPI gateway.
 - **Monitoring** compares drift and realized accuracy against what each champion was accepted with, and triggers retraining.
 
 | Model | Question | OOT ROC-AUC | Lift@10% | Registry |
@@ -33,7 +32,6 @@ Documentation:
 flowchart TD
     subgraph Sources["Sources"]
         CSV["Dunnhumby CSVs (RAW_DATA_DIR, read-only)"]
-        POS["POS / app events"]
     end
 
     subgraph Batch["Batch layer"]
@@ -47,16 +45,9 @@ flowchart TD
         Gold["Gold: fct_weekly_batch_scores,<br/>fct_model_attribution"]
     end
 
-    subgraph Speed["Speed layer"]
-        Kafka["Kafka topic pos-intraday-events"]
-        Consumer["Consumer worker (idempotent on event_id)"]
-        Delta["Redis realtime:delta:{hh}"]
-    end
-
     subgraph Serving["Serving layer"]
         Store["Redis BatchScoreStore<br/>batch:{champion,challenger}:scores"]
-        API["FastAPI gateway<br/>API keys, rate limit, /ready"]
-        Fusion["Fusion: P = f(P_batch, intraday delta)<br/>canary routing, cold start"]
+        API["FastAPI gateway<br/>API keys, rate limit, /ready<br/>canary routing, cold start"]
     end
 
     subgraph Monitoring["Monitoring"]
@@ -74,17 +65,13 @@ flowchart TD
     Features --> Score
     Score --> Gold
     Score --> Store
-    POS --> API -->|events| Kafka --> Consumer --> Delta
-    Store --> Fusion
-    Delta --> Fusion
-    API --> Fusion
+    Store --> API
     Score --> Drift
     Gold --> Feedback
     Drift --> Policy
     Feedback --> Policy
     Policy -->|retrain candidate| Train
     API -->|/metrics| Prom
-    Consumer -->|:9101/metrics| Prom
 ```
 
 Design rules that hold everywhere:
@@ -118,8 +105,7 @@ Design rules that hold everywhere:
 │   │                         # champion/challenger comparison, model registry
 │   ├── models/               # predictor (bundle validation, scoring, tiers)
 │   ├── pipelines/            # train_pipeline, batch_pipeline
-│   ├── serving/              # api, fusion engine, batch store, canary router, security
-│   ├── speed_layer/          # Redis deltas, Kafka producer / consumer
+│   ├── serving/              # api, scoring service, batch store, canary router, security
 │   ├── monitoring/           # drift, reference, feedback, retraining policy, state, metrics
 │   ├── lakehouse/            # DuckDB medallion engine + data-quality checks
 │   ├── scheduler/            # dependency-free cron daemon
@@ -136,7 +122,7 @@ Design rules that hold everywhere:
 ```bash
 cp .env.example .env     # set RAW_DATA_DIR (absolute path to the CSV folder), SERVING_API_KEYS,
                          # GRAFANA_ADMIN_PASSWORD; compose refuses to start without them
-docker compose up -d --build                               # serving, Kafka + consumer, scheduler, observability
+docker compose up -d --build                               # serving, scheduler, observability
 docker compose --profile tools run --rm batch-pipeline     # first batch -> /ready turns 200
 ```
 
@@ -145,18 +131,17 @@ docker compose --profile tools run --rm batch-pipeline     # first batch -> /rea
 | Serving API | http://localhost:8000 (Swagger at `/docs`) |
 | Prometheus / Alertmanager | http://localhost:9090 / http://localhost:9093 |
 | Grafana | http://localhost:3000 (`admin` / `GRAFANA_ADMIN_PASSWORD`) |
-| Kafka | `localhost:9092` (topic `pos-intraday-events`) |
 | Redis | `localhost:6379` |
 
 **End-to-end check:** `python -m scripts.e2e_smoke [--data real|synthetic]` builds the images and starts an isolated
-compose project. It then runs batch scoring, training, feedback and a Kafka speed event, checks Prometheus
+compose project. It then runs batch scoring, training, feedback and predictions, checks Prometheus
 and Alertmanager, and tears everything down. CI runs it nightly on synthetic data (`.github/workflows/e2e.yml`).
 
 ### Local development
 
 ```bash
 pip install -e ".[dev]"
-# Local runs without Redis/Kafka need STRICT_INFRA=false (the default when no .env is present).
+# Local runs without Redis need STRICT_INFRA=false (the default when no .env is present).
 
 python -m src.pipelines.train_pipeline --target purchase --no-promote   # evaluate only
 python -m src.pipelines.train_pipeline --target lapse                   # promote if the gate passes
@@ -176,7 +161,7 @@ uvicorn src.serving.api:app --port 8000
 | Weekly batch | Mon 02:00 UTC | `src.pipelines.batch_pipeline` | Bronze ingest, 28 PIT features (snapshot written to the feature store), score purchase (+ challenger) and lapse, Gold + Redis batch views, CRM / retention exports, drift audit (retrain if CRITICAL) |
 | Monthly retraining | 1st of month 03:00 UTC | `src.pipelines.train_pipeline` (both targets) | Train, calibrate, evaluate OOT, governance gate, atomic promotion, serving hot-reload |
 | Daily data quality | 01:00 UTC | `LakehouseEngine.run_data_quality_framework` | Row counts, negative values, household coverage |
-| Weekly feedback | Wed 04:00 UTC | `GroundTruthFeedbackLoop` | Realized AUC per target on the latest matured cutoff, fusion-rule calibration, retrain if degraded |
+| Weekly feedback | Wed 04:00 UTC | `GroundTruthFeedbackLoop` | Realized AUC per target on the latest matured cutoff, retrain if degraded |
 
 ### 4.1 Feature store
 
@@ -184,7 +169,7 @@ uvicorn src.serving.api:app --port 8000
 |---|---|
 | Location | `FEATURE_STORE_DIR` (default `data/feature_store`; in docker `/app/data/lakehouse/feature_store`) |
 | Offline | `offline/household_features.parquet`: one snapshot per cutoff, appended atomically (re-writing a cutoff replaces it) |
-| Online | None. Serving uses precomputed batch scores in Redis plus the speed layer, not live features |
+| Online | None. Serving uses precomputed batch scores in Redis, not live features |
 | Schema | Generated from the feature contract: 21 `Float64` + 7 `String`. View `household_features_multidomain_v1`, entity `household_key` |
 | Timeline | `DAY d` -> `2026-01-01 + d days` (UTC); TTL = `FEATURE_TTL_DAYS` (7). A read more than 7 days after the last snapshot fails instead of returning stale values |
 | Registry | Applied from code (`FeatureStoreClient.apply()`); no `feast apply` step |
@@ -212,11 +197,10 @@ Day-to-day operation is described in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 |---|---|---|---|
 | Feature and prediction drift (PSI / KS) | Batch pipeline, every run | The champion's own out-of-time test window (bundle `test_cutoffs`) | CRITICAL starts an out-of-cycle retraining |
 | Realized AUC | Feedback job, latest cutoff with matured labels | The AUC the champion was accepted with | Drop > `REALIZED_AUC_DROP_ALERT` (0.05) starts a retraining |
-| Fusion-rule calibration | Feedback job, from the API's served-prediction log | Realized purchase rate | Reports the dampening / boost values implied by the data |
 
 - **Retraining:** a triggered retraining only produces a *candidate*. Promotion still goes through the governance gate. Set `AUTO_RETRAIN_ON_DEGRADATION=false` to only alert.
 - **Getting reports to Prometheus:** the batch and feedback jobs run in their own processes. They publish their reports to `MonitoringState` (Redis, plus a JSON file), and the serving API turns them into gauges on every `/metrics` scrape.
-- **Alerts:** defined in `docker/prometheus/alert_rules.yml` (drift, realized AUC drop, feature snapshot rejected by the quality gate, snapshot-to-snapshot drift > 25% of features, out-of-range values > 5%, p99 latency, missing batch view, serving down, Kafka consumer lag) and routed by Alertmanager (`docker/alertmanager.yml`, port 9093). The rules are unit-tested with `promtool test rules docker/prometheus/alert_rules_test.yml` in CI.
+- **Alerts:** defined in `docker/prometheus/alert_rules.yml` (drift, realized AUC drop, feature snapshot rejected by the quality gate, snapshot-to-snapshot drift > 25% of features, out-of-range values > 5%, p99 latency, missing batch view, serving down) and routed by Alertmanager (`docker/alertmanager.yml`, port 9093). The rules are unit-tested with `promtool test rules docker/prometheus/alert_rules_test.yml` in CI.
 
 ```bash
 python -m src.scheduler.daemon --run-job feedback   # realized AUC for purchase + lapse, retrain if degraded
@@ -226,7 +210,8 @@ python -m src.scheduler.daemon --run-job feedback   # realized AUC for purchase 
 
 ## 5. REST API Reference
 
-The Serving API fuses precomputed batch views with intraday streaming deltas.
+The Serving API answers from the precomputed weekly batch views. The served probability is exactly the
+champion's batch score, so drift, realized AUC and the model card describe what clients receive.
 
 **Where batch scores come from.** `src.pipelines.batch_pipeline` publishes each run to the shared
 `BatchScoreStore`: a Redis hash per variant (champion / challenger), swapped in atomically with `RENAME`,
@@ -234,18 +219,17 @@ so every replica serves the same snapshot. Without Redis, the API loads the newe
 `data/outputs/batch_manifest_day_*.json` artefacts at start-up.
 
 **Security.**
-- Protected endpoints require `X-API-Key` with a key from `SERVING_API_KEYS`: `POST /v1/speed/event`,
+- Protected endpoints require `X-API-Key` with a key from `SERVING_API_KEYS`:
   `POST /v1/canary/config`, `GET /v1/batch/scores` and `POST /v1/models/reload`.
 - With no keys configured, these endpoints are open in development and return `503` in production.
-- Predictions and events are rate-limited per client (`RATE_LIMIT_PER_MINUTE`).
-- `STRICT_INFRA=true` disables every in-memory fallback, so the service fails fast if Redis or an enabled Kafka is down.
+- Predictions are rate-limited per client (`RATE_LIMIT_PER_MINUTE`).
+- `STRICT_INFRA=true` disables every in-memory fallback, so the service fails fast if Redis is down.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
 | `GET /health` | – | Liveness: champion bundle, target, horizon, batch-view status |
 | `GET /ready` | – | Readiness: `503` until champion batch scores are loaded |
-| `POST /v1/predict/propensity` | – | Unified propensity for one household |
-| `POST /v1/speed/event` | key | Intraday event (`pos_checkout`, `coupon_clip`, `app_open`); idempotent on `event_id` |
+| `POST /v1/predict/propensity` | – | Propensity for one household |
 | `GET /v1/batch/scores` | key | Bulk export of batch views (`decile`, `limit`, `variant`) |
 | `GET /v1/canary/config` / `POST` | – / key | Read / change the champion-challenger split |
 | `GET /v1/models/champion` | – | Active champion contract |
@@ -260,13 +244,10 @@ curl -X POST http://localhost:8000/v1/predict/propensity \
 ```json
 {
   "household_key": 100,
-  "unified_propensity": 0.885,
-  "batch_baseline_propensity": 0.885,
+  "propensity": 0.885,
   "decile": 9,
   "urgency_tier": "URGENT",
   "marketing_action": "VIP_COUPON_HALO_UPSELL",
-  "intraday_delta": {"intraday_trips_detected": 0, "intraday_coupons_clipped": 0, "intraday_spend": 0.0},
-  "applied_fusion_rules": [],
   "model_variant": "champion",
   "routed_variant": "champion",
   "score_source": "batch",
@@ -274,27 +255,13 @@ curl -X POST http://localhost:8000/v1/predict/propensity \
 }
 ```
 
-`score_source` tells you where the baseline came from:
+`score_source` tells you where the score came from:
 - `batch`: the household's batch view.
-- `cold_start`: the household has no batch view. The baseline is the population mean of the latest batch
+- `cold_start`: the household has no batch view. The score is the population mean of the latest batch
   (or the champion's test base rate), `decile` is `null` and the action is `COLD_START_DEFAULT`.
 
 `routed_variant` is the canary assignment, and `model_variant` is the batch view actually served. These
 differ when the challenger has no published scores yet; the champion view is served instead.
-
-### Ingest a speed event
-```bash
-curl -X POST http://localhost:8000/v1/speed/event \
-  -H "Content-Type: application/json" -H "X-API-Key: $SERVING_API_KEY" \
-  -d '{"household_key": 100, "event_type": "pos_checkout", "sales_value": 78.50, "event_id": "pos-123"}'
-```
-
-The next prediction for household 100 applies the intraday dampening rule
-($P = P_{\text{batch}} \times$ `FUSION_PURCHASE_DAMPENING`). Re-sending the same `event_id` (a client retry
-or a Kafka redelivery) is acknowledged without being applied twice.
-
-The fusion coefficients (`FUSION_*` settings) are **heuristics**, not learned parameters. Recalibrate them
-from feedback data.
 
 ### Batch export, canary, reload
 ```bash
@@ -339,9 +306,9 @@ run in seconds without real data.
 |---|---|
 | Features & data | `test_feature_contract.py` (PIT correctness, CSV vs Lakehouse parity, train vs batch parity), `test_lakehouse.py` |
 | Training & governance | `test_training_pipeline.py`, `test_governance.py` (gate, paired bootstrap, champion/challenger, atomic promotion, rollback), `test_targets.py` (purchase / lapse, value-ranked retention list), `test_predictor.py` (bundle validation) |
-| Serving & speed layer | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, idempotency, canary variants), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
+| Serving | `test_serving_api.py` (auth 401/503, rate limit 429, cold start, canary variants, streaming endpoint removed), `test_serving_infra.py` (Redis batch store, STRICT_INFRA, challenger scoring), `test_canary_routing.py`, `test_lambda_fusion.py`, `test_kafka_bus.py` |
 | Feature store | `test_feature_store.py` (append-only history, PIT reads equal the builder, TTL, training and batch through the store), `test_feature_quality.py` (each quality check, store refuses and batch stops on a bad snapshot), `test_feature_store_observability.py` (Evidently profile, injected shift detected, trends, gauges, profiling never blocks the batch) |
-| Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, fusion-rule evaluation, gauges), `test_monitoring.py`, `test_scheduler.py` |
+| Monitoring & orchestration | `test_feedback_loop.py` (realized AUC, simulated drift -> retraining, gauges), `test_monitoring.py`, `test_scheduler.py` |
 | Alerting | `docker/prometheus/alert_rules_test.yml` (`promtool test rules`, in CI) |
 
 ---
@@ -354,8 +321,7 @@ Storage and compute are decoupled, so the stack can move to GCP or AWS component
 |---|---|---|---|---|
 | Raw / master data | Read-only CSV mount (`RAW_DATA_DIR`) | Cloud Storage | S3 | Copy once; point `DATA_RAW_DIR` at the mounted bucket |
 | Lakehouse | DuckDB + Parquet | BigQuery | Snowflake / Redshift | Re-implement `LakehouseEngine` Bronze reads; the `DataLoader` contract is unchanged |
-| Speed / serving state | Redis 7 | Memorystore | ElastiCache | Redis replication, then a DNS switch |
-| Event bus | Kafka (KRaft) | Pub/Sub or managed Kafka | MSK / Kinesis | MirrorMaker 2 for Kafka targets |
+| Serving state | Redis 7 | Memorystore | ElastiCache | Redis replication, then a DNS switch |
 | Serving / pipelines | Docker images | GKE | EKS | Same images; blue/green cutover gated by `/ready` |
 
 ---
@@ -364,7 +330,8 @@ Storage and compute are decoupled, so the stack can move to GCP or AWS component
 
 - **Not causal.** Scores rank households and do not measure campaign uplift. At a 14-day horizon, top-decile
   purchase households would mostly buy anyway.
-- **Fusion rules are heuristics.** The dataset has no real intraday events to calibrate them.
+- **Scores refresh weekly.** A household that bought today keeps its score until the next batch; suppress
+  recent buyers in the campaign tool if that matters.
 - **Rate limiting is per process.** Enforce a global limit at the gateway.
 
 ---

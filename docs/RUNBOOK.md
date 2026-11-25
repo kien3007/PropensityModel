@@ -7,10 +7,8 @@ Dành cho người trực vận hành nền tảng propensity: cách chạy job,
 | Service (compose) | Cổng | Kiểm tra |
 |---|---|---|
 | `serving-api` | 8000 | `GET /health` (liveness), `GET /ready` (503 cho tới khi có batch view) |
-| `kafka-consumer` | 9101 (nội bộ) | `/metrics`: `propensity_speed_consumer_lag` |
 | `scheduler` | – | Log: `docker compose logs -f scheduler` |
-| `redis` | 6379 | `redis-cli ping`. Chứa batch view, delta trong ngày, trạng thái monitoring, log dự đoán |
-| `kafka` | 9092 (host), 29092 (nội bộ) | Topic `pos-intraday-events` |
+| `redis` | 6379 | `redis-cli ping`. Chứa batch view và trạng thái monitoring |
 | `prometheus` / `alertmanager` / `grafana` | 9090 / 9093 / 3000 | Luật cảnh báo: `docker/prometheus/alert_rules.yml` |
 
 **Volume dùng chung:**
@@ -79,7 +77,7 @@ Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc tro
 | Chấm điểm batch, kèm kiểm tra drift | Thứ Hai 02:00 UTC | `python -m src.scheduler.daemon --run-job batch` |
 | Retrain cả hai target | Ngày 1 hằng tháng, 03:00 UTC | `python -m src.scheduler.daemon --run-job retrain` |
 | Kiểm tra chất lượng dữ liệu | Hằng ngày 01:00 UTC | `python -m src.scheduler.daemon --run-job dq` |
-| Feedback (AUC thực tế) và đánh giá luật fusion | Thứ Tư 04:00 UTC | `python -m src.scheduler.daemon --run-job feedback` |
+| Feedback (AUC thực tế) | Thứ Tư 04:00 UTC | `python -m src.scheduler.daemon --run-job feedback` |
 
 Job batch và job feedback **tự kích hoạt retrain** khi drift ở mức `CRITICAL_DRIFT` hoặc AUC thực tế giảm quá 0,05. Đặt `AUTO_RETRAIN_ON_DEGRADATION=false` nếu chỉ muốn nhận cảnh báo. Retrain chỉ tạo ra ứng viên; việc promote vẫn phải qua gate.
 
@@ -132,14 +130,9 @@ curl -X POST -H "X-API-Key: $KEY" http://localhost:8000/v1/models/reload
 - Kiểm tra số worker (`--workers` trong `Dockerfile.serving`) và độ trễ của Redis.
 - Load test: `python -m scripts.load_test`. Mốc tham chiếu: p99 khoảng 47 ms với 1 worker và 16 request đồng thời.
 
-### `PropensityKafkaConsumerLagHigh` (warning): consumer chậm hơn 1.000 sự kiện
-1. `docker compose logs kafka-consumer`.
-2. Scale số consumer, nhưng không vượt quá số partition.
-3. Sự kiện được xử lý idempotent theo `event_id`, nên khởi động lại consumer là an toàn.
-
 ### `PropensityServingDown`
 - `docker compose ps serving-api` và `docker compose logs serving-api`.
-- Khi `STRICT_INFRA=true`, API dừng khởi động nếu Redis hoặc Kafka không kết nối được. Lỗi `InfrastructureUnavailable` trong log là dấu hiệu của trường hợp này.
+- Khi `STRICT_INFRA=true`, API dừng khởi động nếu Redis không kết nối được. Lỗi `InfrastructureUnavailable` trong log là dấu hiệu của trường hợp này.
 
 ## 5. Thao tác bảo mật
 
@@ -163,4 +156,4 @@ curl -X POST -H "X-API-Key: $KEY" http://localhost:8000/v1/models/reload
 ## 7. Giới hạn đã biết
 
 - Rate limit chỉ đếm trong từng tiến trình, mỗi worker giữ bộ đếm riêng. Cần giới hạn chung thì đặt ở gateway.
-- Luật fusion là heuristic. Báo cáo `fusion_rules` (job feedback) chỉ có ý nghĩa khi đã có đủ dữ liệu sự kiện trong ngày thật.
+- Điểm chỉ cập nhật mỗi tuần. Khách vừa mua hôm nay vẫn giữ điểm cũ đến lần batch sau; nếu cần, loại khách vừa mua ngay trong công cụ chạy chiến dịch.

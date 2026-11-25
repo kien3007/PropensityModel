@@ -69,23 +69,6 @@ tests:
               summary: "Serving has no champion batch scores: every answer is cold start"
               description: "Run the batch pipeline or check its Redis publication."
 
-  # Consumer lag above 1000 for 5 minutes.
-  - interval: 1m
-    input_series:
-      - series: 'propensity_speed_consumer_lag'
-        values: "5000x10"
-    alert_rule_test:
-      - eval_time: 3m
-        alertname: PropensityKafkaConsumerLagHigh
-        exp_alerts: []
-      - eval_time: 6m
-        alertname: PropensityKafkaConsumerLagHigh
-        exp_alerts:
-          - exp_labels: {severity: warning}
-            exp_annotations:
-              summary: "Speed-layer consumer is 5000 events behind"
-              description: "Intraday deltas are stale; fusion rules act on old information."
-
   # Feature store: the quality gate rejects a snapshot; snapshot-to-snapshot drift and range.
   - interval: 1m
     input_series:

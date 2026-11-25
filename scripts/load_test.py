@@ -1,6 +1,6 @@
 """
 Serving load test: starts the API with uvicorn, waits for /ready, then fires concurrent
-traffic (90% predictions over all households, 10% speed-layer events) and reports
+prediction traffic over all households and reports
 client-side latency percentiles. Acceptance target (Phase 4): p99 < 50 ms.
 
 Usage: python -m scripts.load_test [--requests 5000] [--concurrency 16] [--port 8765]
@@ -74,15 +74,8 @@ def main() -> int:
 
         rng = random.Random(0)
         headers = {"Content-Type": "application/json"}
-        auth = {**headers, "X-API-Key": api_key}
-        jobs = []
-        for _ in range(args.requests):
-            hh = rng.randint(1, 2500)
-            if rng.random() < 0.9:
-                jobs.append(("predict", f"{base}/v1/predict/propensity", {"household_key": hh}, headers))
-            else:
-                event = {"household_key": hh, "event_type": rng.choice(["pos_checkout", "coupon_clip", "app_open"])}
-                jobs.append(("event", f"{base}/v1/speed/event", event, auth))
+        jobs = [("predict", f"{base}/v1/predict/propensity", {"household_key": rng.randint(1, 2500)}, headers)
+                for _ in range(args.requests)]
 
         for job in jobs[:50]:  # warm-up
             _call(*job[1:])
@@ -97,7 +90,7 @@ def main() -> int:
     ok = True
     print(f"\n{len(results):,} requests, concurrency {args.concurrency}, {len(results) / wall:,.0f} req/s\n")
     print(f"{'endpoint':<10}{'count':>8}{'errors':>8}{'p50 ms':>9}{'p95 ms':>9}{'p99 ms':>9}")
-    for kind in ("predict", "event", "all"):
+    for kind in ("predict",):
         rows = [r for r in results if kind == "all" or r[0] == kind]
         lat = np.array([r[1] for r in rows])
         errors = sum(1 for r in rows if r[2] >= 400)

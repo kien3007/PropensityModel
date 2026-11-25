@@ -1,7 +1,7 @@
 name: E2E (docker compose)
 
 # Full-stack smoke test: builds the images, starts the compose stack, runs batch scoring,
-# training, feedback, a Kafka speed event and the observability checks
+# training, feedback, serving and the observability checks
 # (scripts/e2e_smoke.py). Uses synthetic Dunnhumby-shaped data, so no real data is needed.
 on:
   schedule:

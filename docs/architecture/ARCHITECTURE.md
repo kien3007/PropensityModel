@@ -16,7 +16,6 @@ flowchart LR
     registry[("Model registry")]
     batch["Batch scoring<br/>(hằng tuần)"]
     redis[("Redis")]
-    speed["Speed layer<br/>(Kafka)"]
     api["Serving API<br/>(FastAPI)"]
     crm(["CRM / ứng dụng"])
     mon["Monitoring<br/>Prometheus + Grafana"]
@@ -24,7 +23,6 @@ flowchart LR
     data --> fs --> train --> registry --> batch
     fs --> batch
     batch --> redis
-    speed --> redis
     redis --> api --> crm
     api -.-> mon
 ```
@@ -35,8 +33,7 @@ flowchart LR
 | Feature store | Lưu lịch sử 28 feature của từng household theo mỗi ngày cutoff |
 | Training | Train LightGBM; chỉ promote nếu model mới qua governance gate |
 | Batch scoring | Mỗi tuần chấm điểm toàn bộ household rồi đẩy vào Redis |
-| Speed layer | Nhận sự kiện mua hàng trong ngày, điều chỉnh điểm ngay |
-| Serving API | Trả điểm = điểm batch + điều chỉnh trong ngày |
+| Serving API | Trả đúng điểm batch của champion (có canary và cold start) |
 | Monitoring | Drift, AUC thực tế, cảnh báo, dashboard |
 
 ## 2. Mỗi tuần: điểm số được tạo ra như thế nào?
@@ -78,26 +75,22 @@ Hai model chạy song song là `purchase` (mua trong 14 ngày tới) và `lapse`
 
 ```mermaid
 sequenceDiagram
-    participant POS as Quầy POS / web
+    participant CRM as CRM / ứng dụng
     participant API as Serving API
-    participant K as Kafka
-    participant W as Consumer
+    participant C as Canary router
     participant R as Redis
-    participant CRM as CRM
-
-    POS->>API: sự kiện mua hàng (event_id)
-    API->>K: đẩy vào topic
-    K->>W: đọc sự kiện
-    W->>R: ghi điều chỉnh trong ngày (mỗi event_id 1 lần)
 
     CRM->>API: xin điểm household 7
-    API->>R: điểm batch + điều chỉnh trong ngày
-    R-->>API:
-    API-->>CRM: điểm cuối + nhóm mức độ khẩn cấp
+    API->>C: champion hay challenger?
+    C-->>API: champion
+    API->>R: điểm batch của champion
+    R-->>API: xác suất, decile, nhóm khẩn cấp
+    API-->>CRM: điểm + nhóm khẩn cấp + hành động gợi ý
 ```
 
-Ví dụ: household vừa mua sáng nay thì xác suất mua thêm trong vài ngày tới bị giảm xuống (dampening).
+Điểm trả về chính là điểm batch tuần gần nhất; API không điều chỉnh gì thêm.
 Household chưa có điểm batch thì nhận điểm mặc định (cold start).
+Nếu challenger chưa có điểm batch, request được chuyển sang điểm của champion.
 
 ## 5. Làm sao biết model đang xuống cấp?
 

@@ -25,7 +25,6 @@ from src.models.predictor import PropensityPredictor
 from src.monitoring.drift_detector import DataDriftDetector
 from src.monitoring.reference import build_champion_reference
 from src.monitoring.state import MonitoringState
-from src.speed_layer.delta_stream import SpeedLayerProcessor
 from src.serving.batch_store import BatchScoreStore
 from src.training.model_registry import registry_dir_for
 
@@ -192,12 +191,8 @@ def run_batch_pipeline(
     except Exception as e:
         logger.warning(f"Drift Audit could not complete: {e}")
 
-    # 7. Reset Speed Layer Intraday Deltas for fresh cycle
     # 6b. Second model: lapse risk of regular shoppers (skipped if no lapse champion is registered)
     lapse_summary = score_lapse_risk(snapshot, cutoff_day, out_dir, model_path=lapse_model_path)
-
-    speed_proc = SpeedLayerProcessor()
-    speed_proc.reset_intraday_deltas()
 
     duration = (datetime.datetime.now() - start_time).total_seconds()
 
