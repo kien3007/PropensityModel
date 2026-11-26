@@ -10,13 +10,12 @@ import datetime
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Callable, Any, Dict, Optional
 import pandas as pd
 
 from src.config.settings import settings
 from src.config.model_config import LAPSE_TRAINING_CONFIG
 from src.data.loader import DataLoader, RawDataBundle
-from src.features.contract import FEATURE_SET_VERSION
 from src.features.pit_extractor import MultiDomainFeatureBuilder
 from src.features.quality import FeatureQualityError, check_feature_quality
 from src.features.targets import LAPSE
@@ -63,14 +62,18 @@ def run_batch_pipeline(
 
     # 2. Extract Point-in-Time Features through the same loader + builder used in training
     predictor = PropensityPredictor(model_path=model_path, expected_target="purchase")
-    if predictor.feature_set_version != FEATURE_SET_VERSION:
-        raise ValueError(
-            f"Champion uses feature set {predictor.feature_set_version}; batch scoring implements {FEATURE_SET_VERSION}"
-        )
     data = data or DataLoader.from_lakehouse(lakehouse, ingest=False)
     logger.info(f"Extracting Point-in-Time features up to DAY={cutoff_day} from {data.source}...")
+    # The snapshot of the current feature set feeds the quality gate and the feature store; each
+    # model is scored with the feature set it was trained on (an older champion keeps working).
     builder = MultiDomainFeatureBuilder(data)
     snapshot = builder.features_at(cutoff_day)
+    frames = {builder.feature_set_version: snapshot}
+
+    def frame_for(version: str) -> pd.DataFrame:
+        if version not in frames:
+            frames[version] = builder.for_version(version).features_at(cutoff_day)
+        return frames[version]
 
     # 2b. Quality gate + persist the snapshot in the historical feature store (offline history).
     # A snapshot that fails the quality gate stops the run regardless of STRICT_INFRA: scoring
@@ -125,8 +128,10 @@ def run_batch_pipeline(
             logger.warning(f"Feature store profiling failed for DAY {cutoff_day}: {e}")
 
     # 3. Model Inference & Business Tiering
-    logger.info(f"Scoring {len(snapshot):,} households with Champion model '{predictor.bundle_name}'...")
-    scores_df = predictor.score_households(snapshot)
+    champion_frame = frame_for(predictor.feature_set_version)
+    logger.info(f"Scoring {len(champion_frame):,} households with Champion model '{predictor.bundle_name}' "
+                f"({predictor.feature_set_version})...")
+    scores_df = predictor.score_households(champion_frame)
 
     # 4. Save to Lakehouse Gold Layer
     records_saved = lakehouse.save_batch_scores(scores_df, run_id=run_id, snapshot_day=cutoff_day)
@@ -153,7 +158,7 @@ def run_batch_pipeline(
     if challenger_path:
         challenger = PropensityPredictor(model_path=challenger_path, expected_target="purchase",
                                          expected_horizon_days=predictor.horizon_days)
-        challenger_scores = challenger.score_households(snapshot)
+        challenger_scores = challenger.score_households(frame_for(challenger.feature_set_version))
         challenger_parquet = out_dir / f"household_scores_challenger_day_{cutoff_day}.parquet"
         challenger_scores.to_parquet(challenger_parquet, index=False)
         store.publish(challenger_scores, "challenger", {"run_id": run_id, "snapshot_day": cutoff_day,
@@ -166,11 +171,11 @@ def run_batch_pipeline(
     #    a snapshot of the same day, which would always look stable)
     drift_summary = None
     try:
-        reference = build_champion_reference(predictor, builder)
+        reference = build_champion_reference(predictor, builder.for_version(predictor.feature_set_version))
         detector = DataDriftDetector(output_dir=out_dir / "reports")
         drift_report = detector.generate_full_drift_audit(
             reference_df=reference.features,
-            current_df=snapshot,
+            current_df=champion_frame,
             reference_scores=reference.scores,
             current_scores=scores_df["purchase_probability"].to_numpy(),
             run_id=f"DRIFT_{run_id}",
@@ -192,7 +197,7 @@ def run_batch_pipeline(
         logger.warning(f"Drift Audit could not complete: {e}")
 
     # 6b. Second model: lapse risk of regular shoppers (skipped if no lapse champion is registered)
-    lapse_summary = score_lapse_risk(snapshot, cutoff_day, out_dir, model_path=lapse_model_path)
+    lapse_summary = score_lapse_risk(snapshot, cutoff_day, out_dir, model_path=lapse_model_path, frame_for=frame_for)
 
     duration = (datetime.datetime.now() - start_time).total_seconds()
 
@@ -202,6 +207,7 @@ def run_batch_pipeline(
         "model_bundle": predictor.bundle_name,
         "horizon_days": predictor.horizon_days,
         "data_source": data.source,
+        "feature_set_version": predictor.feature_set_version,
         "feature_count": len(predictor.features),
         "total_households_scored": len(scores_df),
         "mean_propensity": float(scores_df["purchase_probability"].mean()),
@@ -236,13 +242,20 @@ def score_lapse_risk(
     cutoff_day: int,
     out_dir: Path,
     model_path: Optional[Path | str] = None,
+    frame_for: Optional[Callable[[str], pd.DataFrame]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Scores eligible regular shoppers with the lapse champion and exports a retention list."""
+    """
+    Scores eligible regular shoppers with the lapse champion and exports a retention list.
+    `frame_for(version)` supplies features of the lapse model's own feature set when it differs
+    from `snapshot`'s.
+    """
     path = Path(model_path or (registry_dir_for(LAPSE_TRAINING_CONFIG) / "champion_model.joblib"))
     if not path.exists():
         logger.info(f"No lapse champion at {path}; lapse-risk scoring skipped.")
         return None
     predictor = PropensityPredictor(model_path=path, expected_target="lapse")
+    if frame_for is not None:
+        snapshot = frame_for(predictor.feature_set_version)
     eligible = snapshot[LAPSE.eligible(snapshot)]
     scores = predictor.score_households(eligible)
     csv_path = out_dir / f"lapse_risk_day_{cutoff_day}.csv"

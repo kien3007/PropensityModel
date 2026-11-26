@@ -16,10 +16,16 @@ from feast import Entity, FeatureView, Field, FileSource
 from feast.types import Float64, String
 from feast.value_type import ValueType
 
-from src.features.contract import CATEGORICAL_FEATURES, FEATURE_SET_VERSION, MODEL_FEATURES
+from src.features.contract import CATEGORICAL_FEATURES, FEATURE_SET_VERSION, features_for
 
 FEATURE_EPOCH = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
-FEATURE_VIEW_NAME = f"household_features_{FEATURE_SET_VERSION}"
+
+
+def feature_view_name(feature_set_version: str = FEATURE_SET_VERSION) -> str:
+    return f"household_features_{feature_set_version}"
+
+
+FEATURE_VIEW_NAME = feature_view_name()  # view of the current feature set
 PROJECT_NAME = "propensity"
 
 
@@ -39,23 +45,25 @@ household = Entity(
 )
 
 
-def build_feature_view(offline_path: str, ttl_days: int) -> FeatureView:
+def build_feature_view(offline_path: str, ttl_days: int, feature_set_version: str = FEATURE_SET_VERSION) -> FeatureView:
+    features = features_for(feature_set_version)
+    view = feature_view_name(feature_set_version)
     schema = [
         Field(name=f, dtype=String if f in CATEGORICAL_FEATURES else Float64)
-        for f in MODEL_FEATURES
+        for f in features
     ]
     source = FileSource(
-        name=f"{FEATURE_VIEW_NAME}_source",
+        name=f"{view}_source",
         path=offline_path,
         timestamp_field="event_timestamp",
         created_timestamp_column="created_timestamp",
     )
     return FeatureView(
-        name=FEATURE_VIEW_NAME,
+        name=view,
         entities=[household],
         ttl=timedelta(days=ttl_days),
         schema=schema,
         online=False,  # offline history only; serving reads precomputed scores from Redis
         source=source,
-        description=f"{len(MODEL_FEATURES)} point-in-time features ({FEATURE_SET_VERSION}), one snapshot per cutoff",
+        description=f"{len(features)} point-in-time features ({feature_set_version}), one snapshot per cutoff",
     )

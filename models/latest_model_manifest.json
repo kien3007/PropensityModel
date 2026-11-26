@@ -1,8 +1,9 @@
 {
   "schema_version": 2,
-  "bundle_name": "lgbm_multidomain_v1_h14_20261123_110542_974814",
-  "created_at": "20261123_110542_974814",
-  "feature_set_version": "multidomain_v1",
+  "bundle_name": "lgbm_purchase_multidomain_v2_h14_20261126_113544_071807",
+  "created_at": "20261126_113544_071807",
+  "target": "purchase",
+  "feature_set_version": "multidomain_v2",
   "features": [
     "days_since_last_basket",
     "days_since_last_perishable",
@@ -23,7 +24,6 @@
     "perishable_basket_ratio_90d",
     "is_targeted_by_active_campaign",
     "coupon_redemption_count_180d",
-    "primary_store_id",
     "store_loyalty_index",
     "classification_1",
     "classification_2",
@@ -69,69 +69,69 @@
   "calibration_method": "isotonic",
   "calibration_report": {
     "none": {
-      "cv_ece": 0.009382
+      "cv_ece": 0.01197
     },
     "platt": {
-      "cv_ece": 0.008376
+      "cv_ece": 0.009172
     },
     "isotonic": {
-      "cv_ece": 0.008139
+      "cv_ece": 0.004348
     }
   },
-  "best_iteration": 164,
+  "best_iteration": 289,
   "lgbm_params": {
     "objective": "binary",
     "n_estimators": 1000,
     "learning_rate": 0.03,
-    "max_depth": 6,
-    "num_leaves": 31,
-    "min_child_samples": 20,
-    "subsample": 0.8,
+    "max_depth": 3,
+    "num_leaves": 8,
+    "min_child_samples": 400,
+    "subsample": 0.7,
     "subsample_freq": 1,
-    "colsample_bytree": 0.8,
+    "colsample_bytree": 0.95,
     "random_state": 42,
     "n_jobs": -1,
     "verbosity": -1
   },
   "metrics": {
-    "roc_auc": 0.859332,
-    "pr_auc": 0.930665,
-    "brier_score": 0.13682,
-    "log_loss": 0.418777,
-    "ece": 0.019304,
+    "roc_auc": 0.86059,
+    "pr_auc": 0.931083,
+    "brier_score": 0.136017,
+    "log_loss": 0.417154,
+    "ece": 0.015371,
     "base_rate": 0.7014,
-    "top_10_precision": 0.994,
-    "lift_at_10pct": 1.4172,
+    "top_10_precision": 0.992,
+    "lift_at_10pct": 1.4143,
     "max_attainable_lift_10": 1.4257,
     "sample_size": 5000,
-    "top_decile_lift": 1.4172,
-    "brier_skill_score": 0.346728,
-    "normalized_lift_10": 0.979952,
-    "pr_auc_gain": 0.7678
+    "top_decile_lift": 1.4143,
+    "brier_skill_score": 0.350562,
+    "normalized_lift_10": 0.973254,
+    "pr_auc_gain": 0.7692
   },
   "val_metrics": {
-    "roc_auc": 0.869475,
-    "pr_auc": 0.937174,
-    "brier_score": 0.133556,
-    "log_loss": 0.410145,
-    "ece": 0.009382,
+    "roc_auc": 0.871147,
+    "pr_auc": 0.938291,
+    "brier_score": 0.132714,
+    "log_loss": 0.407961,
+    "ece": 0.01197,
     "base_rate": 0.6907,
     "top_10_precision": 0.996,
     "lift_at_10pct": 1.4421,
     "max_attainable_lift_10": 1.4479,
     "sample_size": 7500,
     "top_decile_lift": 1.4421,
-    "brier_skill_score": 0.374873,
+    "brier_skill_score": 0.378814,
     "normalized_lift_10": 0.987017,
-    "pr_auc_gain": 0.796899
+    "pr_auc_gain": 0.80051
   },
   "data_fingerprint": "385c047b9baa0a81",
-  "git_sha": "4d1e5e3",
+  "git_sha": "5ee576f-dirty",
   "lightgbm_version": "4.7.0",
   "sklearn_version": "1.7.2",
-  "version": "20261123_110542_974814",
-  "activated_at": "2026-11-23T11:05:47",
+  "version": "20261126_113544_071807",
+  "activated_at": "2026-11-26T11:35:48",
   "activation_event": "promote",
   "activation_reason": "governance gate passed",
-  "archive_path": "C:\\Users\\kienn\\PropensityVSF\\models\\history\\champion_model_20261123_110542_974814.joblib"
+  "archive_path": "C:\\Users\\kienn\\PropensityVSF\\models\\history\\champion_model_20261126_113544_071807.joblib"
 }

@@ -2,7 +2,7 @@
 Feast-backed historical feature store.
 
 Layout under settings.FEATURE_STORE_DIR:
-  offline/household_features.parquet   every snapshot ever written (one per cutoff day)
+  offline/household_features_<version>.parquet   every snapshot of one feature set (one per cutoff day)
   registry.db                          Feast registry (applied from code; no `feast apply` needed)
 
 Writes:  `write_snapshot` runs the feature quality gate, then appends (or replaces) the rows of one cutoff atomically; it never
@@ -28,15 +28,16 @@ from feast.repo_config import RepoConfig
 
 from src.config.settings import settings
 from src.feature_store.definitions import (
-    FEATURE_VIEW_NAME,
     PROJECT_NAME,
     build_feature_view,
     day_to_timestamp,
+    feature_view_name,
     household,
 )
 from src.features.contract import (
     CATEGORICAL_FEATURES,
-    MODEL_FEATURES,
+    FEATURE_SET_VERSION,
+    features_for,
     FeatureContractError,
     normalize_feature_dtypes,
     validate_feature_frame,
@@ -45,7 +46,7 @@ from src.features.quality import check_feature_quality
 
 logger = logging.getLogger("FeatureStore")
 
-OFFLINE_COLUMNS = ["household_key", "cutoff_day", "event_timestamp", "created_timestamp", *MODEL_FEATURES]
+META_COLUMNS = ["household_key", "cutoff_day", "event_timestamp", "created_timestamp"]
 
 
 class MissingSnapshotError(LookupError):
@@ -53,9 +54,13 @@ class MissingSnapshotError(LookupError):
 
 
 class FeatureStoreClient:
-    def __init__(self, root: Optional[Path | str] = None, ttl_days: Optional[int] = None) -> None:
+    def __init__(self, root: Optional[Path | str] = None, ttl_days: Optional[int] = None,
+                 feature_set_version: str = FEATURE_SET_VERSION) -> None:
         self.root = Path(root or settings.FEATURE_STORE_DIR).resolve()
-        self.offline_path = self.root / "offline" / "household_features.parquet"
+        self.feature_set_version = feature_set_version
+        self.features = features_for(feature_set_version)
+        self.view_name = feature_view_name(feature_set_version)
+        self.offline_path = self.root / "offline" / f"household_features_{feature_set_version}.parquet"
         self.offline_path.parent.mkdir(parents=True, exist_ok=True)
         self.ttl_days = ttl_days or settings.FEATURE_TTL_DAYS
         config = RepoConfig(
@@ -68,7 +73,7 @@ class FeatureStoreClient:
             repo_path=self.root,
         )
         self.store = FeatureStore(config=config)
-        self.feature_view = build_feature_view(self.offline_path.as_posix(), self.ttl_days)
+        self.feature_view = build_feature_view(self.offline_path.as_posix(), self.ttl_days, feature_set_version)
         self._applied = False
 
     # -------------------------------------------------------------- registry
@@ -81,7 +86,7 @@ class FeatureStoreClient:
     # ----------------------------------------------------------------- write
     def _read_offline(self) -> pd.DataFrame:
         if not self.offline_path.exists():
-            return pd.DataFrame(columns=OFFLINE_COLUMNS)
+            return pd.DataFrame(columns=[*META_COLUMNS, *self.features])
         return pd.read_parquet(self.offline_path)
 
     def snapshot_days(self) -> List[int]:
@@ -101,7 +106,7 @@ class FeatureStoreClient:
         df = pd.read_parquet(self.offline_path, filters=[("cutoff_day", "==", int(cutoff_day))])
         if df.empty:
             raise MissingSnapshotError(f"No feature snapshot for DAY {cutoff_day}")
-        return df[["household_key", *MODEL_FEATURES]].reset_index(drop=True)
+        return df[["household_key", *self.features]].reset_index(drop=True)
 
     @staticmethod
     def _previous_snapshot(existing: pd.DataFrame, cutoff_day: int) -> Optional[pd.DataFrame]:
@@ -119,8 +124,8 @@ class FeatureStoreClient:
         The snapshot must pass the quality gate first (compared with the previous stored
         snapshot); a failing snapshot raises FeatureQualityError and nothing is written.
         """
-        validate_feature_frame(features)
-        snap = normalize_feature_dtypes(features)[["household_key", *MODEL_FEATURES]].copy()
+        validate_feature_frame(features, self.features)
+        snap = normalize_feature_dtypes(features)[["household_key", *self.features]].copy()
         for col in CATEGORICAL_FEATURES:  # Feast String columns are stored as plain strings
             snap[col] = snap[col].astype(str)
 
@@ -165,21 +170,21 @@ class FeatureStoreClient:
         self.apply()
         entity_df = pd.DataFrame({"household_key": list(households)})
         entity_df["event_timestamp"] = day_to_timestamp(cutoff_day)
-        refs = [f"{FEATURE_VIEW_NAME}:{f}" for f in MODEL_FEATURES]
+        refs = [f"{self.view_name}:{f}" for f in self.features]
         df = self.store.get_historical_features(entity_df=entity_df, features=refs).to_df()
         df = df.drop(columns=["event_timestamp"]).assign(cutoff_day=int(cutoff_day))
         df["household_key"] = df["household_key"].astype("int64")
         order = pd.DataFrame({"household_key": [int(h) for h in households]})
         # Feast drops entity rows with no snapshot inside the TTL; the left join exposes them.
         df = order.merge(df, on="household_key", how="left", validate="one_to_one")
-        missing = df[MODEL_FEATURES].isna().any(axis=1)
+        missing = df[self.features].isna().any(axis=1)
         if missing.any():
             raise MissingSnapshotError(
                 f"{int(missing.sum())} of {len(df)} households have no snapshot within {self.ttl_days} days "
                 f"before DAY {cutoff_day}; backfill that cutoff"
             )
-        df = normalize_feature_dtypes(df[["household_key", "cutoff_day", *MODEL_FEATURES]])
-        validate_feature_frame(df)
+        df = normalize_feature_dtypes(df[["household_key", "cutoff_day", *self.features]])
+        validate_feature_frame(df, self.features)
         return df
 
 
@@ -192,9 +197,16 @@ class FeatureStoreSource:
 
     def __init__(self, builder, client: Optional[FeatureStoreClient] = None, backfill_missing: bool = True) -> None:
         self.builder = builder
-        self.client = client or FeatureStoreClient()
+        self.client = client or FeatureStoreClient(feature_set_version=builder.feature_set_version)
+        if self.client.feature_set_version != builder.feature_set_version:
+            raise ValueError(f"Feature store holds {self.client.feature_set_version}, "
+                             f"builder computes {builder.feature_set_version}")
         self.backfill_missing = backfill_missing
         self.source = "feast"
+
+    @property
+    def feature_set_version(self) -> str:
+        return self.builder.feature_set_version
 
     @property
     def data(self):

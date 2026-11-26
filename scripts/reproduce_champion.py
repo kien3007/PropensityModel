@@ -48,15 +48,20 @@ def main() -> int:
         expected_horizon_days=cfg.horizon_days,
         expected_target=cfg.target,
     )
-    if champion.feature_set_version != cfg.feature_set_version:
-        logger.error(f"Champion feature set {champion.feature_set_version} != config {cfg.feature_set_version}")
-        return 1
+    # Reproduce the champion's own recipe (feature set and hyper-parameters it was trained with),
+    # which may differ from the current default config.
+    recorded_params = champion.bundle.get("lgbm_params")
+    cfg = cfg.with_overrides(
+        feature_set_version=champion.feature_set_version,
+        **({"lgbm_params": dict(recorded_params)} if recorded_params else {}),
+    )
 
     data = DataLoader.load(args.data_source)
     summary = run_training_pipeline(config=cfg, data=data, output_dir=args.output_dir, promote=False)
     candidate = summary["test_metrics"]
 
-    builder = MultiDomainFeatureBuilder(data, lookback_days=cfg.lookback_days)
+    builder = MultiDomainFeatureBuilder(data, lookback_days=cfg.lookback_days,
+                                        feature_set_version=cfg.feature_set_version)
     test = DatasetBuilder(builder).build(cfg.test_cutoffs, cfg.horizon_days, get_target(cfg.target))
     incumbent = ModelEvaluator.evaluate(test["target"], champion.predict_proba(test))
 

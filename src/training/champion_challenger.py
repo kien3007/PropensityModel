@@ -5,15 +5,17 @@ The challenger replaces the champion only if it is not worse on the *same* out-o
 test rows: the lower bound of the 95% household-clustered bootstrap CI of
 AUC(challenger) - AUC(champion) must be >= -non_inferiority_margin_auc.
 
-If the champion predicts a different target (horizon / feature set), the two models are
-not comparable and the challenger is blocked: changing the target is a deliberate
-decision that needs `force_promote`.
+If the champion predicts a different target or horizon, the two models are not comparable
+and the challenger is blocked: changing the target is a deliberate decision that needs
+`force_promote`. A champion on an older feature set is still comparable: it is scored on
+the same test cutoffs with its own feature set (`champion_test_frame`), joined on
+(household_key, cutoff_day).
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -32,6 +34,7 @@ def compare_with_champion(
     test_frame: pd.DataFrame,
     champion_path: Path,
     config: TrainingConfig,
+    champion_test_frame: Optional[Callable[[str], pd.DataFrame]] = None,
 ) -> Dict[str, Any]:
     gate = config.gate
     if not Path(champion_path).exists():
@@ -43,21 +46,38 @@ def compare_with_champion(
     except (ModelBundleError, FeatureContractError) as exc:
         return {"status": "incomparable", "passed": False, "reason": f"champion bundle unusable: {exc}"}
 
-    champion_def = (champion.target, champion.feature_set_version, champion.horizon_days)
-    challenger_def = (config.target, config.feature_set_version, config.horizon_days)
+    champion_def = (champion.target, champion.horizon_days)
+    challenger_def = (config.target, config.horizon_days)
     if champion_def != challenger_def:
         reason = (
             f"target changed: champion {champion_def} vs challenger {challenger_def} "
-            "(target, feature set, horizon); promote with force_promote"
+            "(target, horizon); promote with force_promote"
         )
         logger.warning(f"Champion comparison not possible: {reason}")
         return {"status": "incomparable", "passed": False, "reason": reason}
 
-    y = test_frame["target"].to_numpy()
-    champion_probs = champion.predict_proba(test_frame)
+    keys = ["household_key", "cutoff_day"]
+    rows = test_frame[keys + ["target"]].assign(challenger_p=np.asarray(challenger_probs))
+    if champion.feature_set_version == config.feature_set_version:
+        rows["champion_p"] = champion.predict_proba(test_frame)
+    else:
+        if champion_test_frame is None:
+            reason = (f"champion uses feature set {champion.feature_set_version}, challenger "
+                      f"{config.feature_set_version}, and no champion test frame was supplied")
+            return {"status": "incomparable", "passed": False, "reason": reason}
+        champ_frame = champion_test_frame(champion.feature_set_version)
+        champ_rows = champ_frame[keys + ["target"]].assign(champion_p=champion.predict_proba(champ_frame))
+        rows = rows.merge(champ_rows, on=keys, suffixes=("", "_champion"), validate="one_to_one")
+        if not (rows["target"] == rows["target_champion"]).all():
+            raise ValueError("Champion and challenger test labels disagree on shared rows")
+        logger.info(f"Champion on {champion.feature_set_version} vs challenger on {config.feature_set_version}: "
+                    f"{len(rows):,} shared test rows (challenger {len(test_frame):,}, champion {len(champ_frame):,})")
+
+    y = rows["target"].to_numpy()
+    champion_probs = rows["champion_p"].to_numpy()
     boot = paired_bootstrap_delta(
-        y, challenger_probs, champion_probs,
-        groups=test_frame["household_key"].to_numpy(),
+        y, rows["challenger_p"].to_numpy(), champion_probs,
+        groups=rows["household_key"].to_numpy(),
         n_samples=gate.bootstrap_samples, seed=gate.bootstrap_seed,
     )
     passed = boot["ci_low"] >= -gate.non_inferiority_margin_auc
@@ -71,7 +91,11 @@ def compare_with_champion(
         "status": "compared",
         "passed": bool(passed),
         "champion_bundle": champion.bundle_name,
+        "champion_feature_set": champion.feature_set_version,
+        "challenger_feature_set": config.feature_set_version,
+        "rows_compared": int(len(rows)),
         "champion_metrics": ModelEvaluator.evaluate(y, champion_probs),
+        "challenger_metrics_on_shared_rows": ModelEvaluator.evaluate(y, rows["challenger_p"].to_numpy()),
         "auc_delta": round(boot["delta"], 6),
         "auc_delta_ci95": [round(boot["ci_low"], 6), round(boot["ci_high"], 6)],
         "p_challenger_not_better": round(boot["p_a_not_better"], 4),

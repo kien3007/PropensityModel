@@ -8,13 +8,13 @@ rule come from the configured `TargetSpec` (src/features/targets.py).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Dict, Sequence
+from dataclasses import dataclass, field
+from typing import List, Dict, Sequence
 
 import pandas as pd
 
 from src.config.model_config import TrainingConfig
-from src.features.contract import CATEGORICAL_FEATURES, MODEL_FEATURES, apply_categorical_dtypes
+from src.features.contract import CATEGORICAL_FEATURES, MODEL_FEATURES, apply_categorical_dtypes, features_for
 from src.features.pit_extractor import MultiDomainFeatureBuilder
 from src.features.targets import PURCHASE, TargetSpec, get_target
 
@@ -25,10 +25,11 @@ logger = logging.getLogger(__name__)
 class TemporalSplit:
     name: str
     frame: pd.DataFrame  # household_key, cutoff_day, <features>, target
+    features: List[str] = field(default_factory=lambda: list(MODEL_FEATURES))
 
     @property
     def X(self) -> pd.DataFrame:
-        return self.frame[MODEL_FEATURES]
+        return self.frame[self.features]
 
     @property
     def y(self) -> pd.Series:
@@ -69,11 +70,14 @@ class DatasetBuilder:
         return apply_categorical_dtypes(pd.concat(frames, ignore_index=True), CATEGORICAL_FEATURES)
 
     def build_splits(self, config: TrainingConfig) -> Dict[str, TemporalSplit]:
+        version = getattr(self.features, "feature_set_version", config.feature_set_version)
+        if version != config.feature_set_version:
+            raise ValueError(f"Feature source computes {version}, config expects {config.feature_set_version}")
+        features = features_for(config.feature_set_version)
         target = get_target(config.target)
         splits = {
-            "fit": TemporalSplit("fit", self.build(config.fit_cutoffs, config.horizon_days, target)),
-            "val": TemporalSplit("val", self.build(config.val_cutoffs, config.horizon_days, target)),
-            "test": TemporalSplit("test", self.build(config.test_cutoffs, config.horizon_days, target)),
+            name: TemporalSplit(name, self.build(cutoffs, config.horizon_days, target), features)
+            for name, cutoffs in (("fit", config.fit_cutoffs), ("val", config.val_cutoffs), ("test", config.test_cutoffs))
         }
         for split in splits.values():
             logger.info(f"Split '{split.name}': {len(split.frame):,} rows, positive rate {split.positive_rate:.4f}")

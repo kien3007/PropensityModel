@@ -49,7 +49,7 @@ class TrainingConfig:
     registry_subdir: str = ""
 
     # Feature contract version the model is trained against (see src/features/contract.py).
-    feature_set_version: str = "multidomain_v1"
+    feature_set_version: str = "multidomain_v2"
 
     # Label window: (cutoff, cutoff + horizon_days].
     horizon_days: int = 14
@@ -67,13 +67,16 @@ class TrainingConfig:
             "objective": "binary",
             "n_estimators": 1000,
             "learning_rate": 0.03,
-            "max_depth": 6,
-            "num_leaves": 31,
-            "min_child_samples": 20,
-            "subsample": 0.8,
+            # Shallow trees from the projectphase3 search (30 random configs on the validation
+            # cutoffs, then a 7-fold rolling backtest): same ROC-AUC as depth 6 / 31 leaves with a
+            # better Brier skill score (6 of 7 folds) and a much simpler model.
+            "max_depth": 3,
+            "num_leaves": 8,
+            "min_child_samples": 400,
+            "subsample": 0.7,
             # LightGBM ignores `subsample` unless bagging frequency > 0.
             "subsample_freq": 1,
-            "colsample_bytree": 0.8,
+            "colsample_bytree": 0.95,
             "random_state": 42,
             "n_jobs": -1,
             "verbosity": -1,

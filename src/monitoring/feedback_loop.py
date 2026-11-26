@@ -110,7 +110,7 @@ class GroundTruthFeedbackLoop:
             con.close()
 
     def _replay_predictions(self, predictor: PropensityPredictor, cutoff_day: int) -> pd.DataFrame:
-        feats = self.builder.features_at(cutoff_day)
+        feats = self.builder.for_version(predictor.feature_set_version).features_at(cutoff_day)
         feats = feats[get_target(predictor.target).eligible(feats)]
         scored = predictor.score_households(feats)
         prob_col = "lapse_probability" if predictor.target == "lapse" else "purchase_probability"

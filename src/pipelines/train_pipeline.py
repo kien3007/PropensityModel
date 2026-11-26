@@ -23,8 +23,9 @@ from typing import Any, Dict, Optional
 from src.config.model_config import DEFAULT_TRAINING_CONFIG, TRAINING_CONFIGS, TrainingConfig
 from src.config.settings import settings
 from src.data.loader import DataLoader, RawDataBundle
-from src.features.contract import CATEGORICAL_FEATURES, FEATURE_SET_VERSION, MODEL_FEATURES
+from src.features.contract import CATEGORICAL_FEATURES, features_for
 from src.features.pit_extractor import MultiDomainFeatureBuilder
+from src.features.targets import get_target
 from src.training.calibrator import select_calibrator
 from src.training.champion_challenger import compare_with_champion
 from src.training.dataset_builder import DatasetBuilder
@@ -52,8 +53,7 @@ def run_training_pipeline(
     force_promote=True promotes even when the governance gate fails (manual use only).
     """
     cfg = config or DEFAULT_TRAINING_CONFIG
-    if cfg.feature_set_version != FEATURE_SET_VERSION:
-        raise ValueError(f"Config targets feature set {cfg.feature_set_version}, code implements {FEATURE_SET_VERSION}")
+    model_features = features_for(cfg.feature_set_version)  # any supported feature set can be trained
 
     start = datetime.datetime.now()
     run_id = f"TRAIN_{start.strftime('%Y%m%d_%H%M%S')}"
@@ -65,14 +65,16 @@ def run_training_pipeline(
 
     # 1. Data & temporal splits
     raw = data or DataLoader.load()
-    builder = MultiDomainFeatureBuilder(raw, lookback_days=cfg.lookback_days)
+    builder = MultiDomainFeatureBuilder(raw, lookback_days=cfg.lookback_days,
+                                        feature_set_version=cfg.feature_set_version)
     source_name = (feature_source or settings.TRAINING_FEATURE_SOURCE).lower()
     if source_name == "feast":
         # Point-in-time reads from the historical feature store; cutoffs never snapshotted
         # are computed once and written back (backfill), labels still come from baskets.
         from src.feature_store.client import FeatureStoreClient, FeatureStoreSource
 
-        features = FeatureStoreSource(builder, FeatureStoreClient(root=feature_store_dir))
+        features = FeatureStoreSource(builder, FeatureStoreClient(root=feature_store_dir,
+                                                                  feature_set_version=cfg.feature_set_version))
     elif source_name == "builder":
         features = builder
     else:
@@ -82,7 +84,7 @@ def run_training_pipeline(
 
     # 2. Train with early stopping on validation
     trainer = ModelTrainer(
-        features=MODEL_FEATURES,
+        features=model_features,
         categorical_features=CATEGORICAL_FEATURES,
         lgbm_params=cfg.lgbm_params,
         early_stopping_rounds=cfg.early_stopping_rounds,
@@ -108,7 +110,7 @@ def run_training_pipeline(
     bundle = build_bundle(
         model=model,
         calibrator=calibrator,
-        features=MODEL_FEATURES,
+        features=model_features,
         categorical_features=CATEGORICAL_FEATURES,
         config=cfg,
         test_metrics=test_metrics,
@@ -125,6 +127,9 @@ def run_training_pipeline(
         test_frame=test.frame,
         champion_path=registry.champion_path,
         config=cfg,
+        # A champion on another feature set is scored with its own features on the same cutoffs.
+        champion_test_frame=lambda version: DatasetBuilder(builder.for_version(version)).build(
+            cfg.test_cutoffs, cfg.horizon_days, get_target(cfg.target)),
     )
     gate = {"passed": quality["passed"] and comparison["passed"], "quality": quality, "champion_comparison": comparison}
 

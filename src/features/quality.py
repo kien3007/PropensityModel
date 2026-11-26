@@ -10,8 +10,8 @@ These checks catch values that are finite but wrong:
   - degeneration  the share of zeros in a feature cannot jump vs the previous snapshot
                   (typical symptom of a broken upstream join that fills everything with 0)
 
-Thresholds were calibrated on the 17 real Dunnhumby snapshots (DAY 200..711): no real snapshot
-violates them, the largest real zero-share jump between consecutive snapshots is 0.04
+Thresholds were calibrated on the 17 real Dunnhumby snapshots (DAY 200..711) of both feature sets
+(multidomain_v1 and v2): no real snapshot violates them, the largest real zero-share jump between consecutive snapshots is 0.04
 (excluding the campaign flag, which legitimately flips when campaigns start or end).
 """
 from __future__ import annotations
@@ -55,7 +55,6 @@ def numeric_bounds(lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> Dict[str, Boun
         "perishable_basket_ratio_90d": Bound(0, 1),
         "is_targeted_by_active_campaign": Bound(0, 1, integer=True),
         "coupon_redemption_count_180d": Bound(0, integer=True),
-        "primary_store_id": Bound(0, integer=True),
         "store_loyalty_index": Bound(0, 1),
     }
     for window in (14, 30, 60, 90, 180):
