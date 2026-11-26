@@ -1,6 +1,6 @@
 # Model Card: Propensity champions
 
-> Cập nhật: 2026-11-23. Số liệu lấy từ `models/latest_model_manifest.json` và `models/lapse/latest_model_manifest.json`.
+> Cập nhật: 2026-11-26. Số liệu lấy từ `models/latest_model_manifest.json` và `models/lapse/latest_model_manifest.json`.
 > Mọi chỉ số là kết quả trên tập test **out-of-time** (cutoff 650 và 680), tức dữ liệu model chưa thấy lúc train và lúc chọn calibration.
 
 ## 1. Tổng quan
@@ -10,11 +10,11 @@
 | Câu hỏi | Hộ có mua ít nhất 1 basket hợp lệ trong 14 ngày tới không? | Hộ đang mua đều đặn có *ngừng* mua trong 21 ngày tới không? |
 | Đối tượng được chấm | Toàn bộ 2.500 hộ | Hộ có ≥ 1 basket trong 30 ngày **và** ≥ 4 basket trong 90 ngày (khoảng 1.850 hộ) |
 | Nhãn | 1 nếu có basket với tổng chi > 0 trong (t0, t0 + 14] | 1 nếu **không** có basket hợp lệ nào trong (t0, t0 + 21] |
-| Bundle | `lgbm_multidomain_v1_h14_20261123_110542_974814` | `lgbm_lapse_multidomain_v1_h21_20261123_111333_402173` |
+| Bundle | `lgbm_purchase_multidomain_v2_h14_20261126_113544_071807` | `lgbm_lapse_multidomain_v2_h21_20261126_113618_388050` |
 | Registry | `models/` | `models/lapse/` |
 | Dùng cho | Serving API (`/v1/predict/propensity`), batch CRM export | Danh sách retention trong batch (`lapse_risk_day_<cutoff>.csv`) |
 
-Cả hai đều là LightGBM trên **28 feature multi-domain** (`multidomain_v1`, xem [src/features/contract.py](../src/features/contract.py)):
+Cả hai đều là LightGBM trên **27 feature multi-domain** (`multidomain_v2`, xem [src/features/contract.py](../src/features/contract.py)):
 - recency và chu kỳ mua;
 - tần suất mua trong các cửa sổ 14 / 30 / 60 / 90 / 180 ngày;
 - chi tiêu;
@@ -23,9 +23,14 @@ Cả hai đều là LightGBM trên **28 feature multi-domain** (`multidomain_v1`
 - mức độ trung thành với cửa hàng;
 - 7 biến demographic dạng categorical.
 
-Mọi feature được tính **point-in-time**: chỉ dùng dữ liệu có `DAY ≤ t0`.
+Mọi feature được tính **point-in-time**: chỉ dùng dữ liệu có `DAY ≤ t0`. Cửa sổ "N ngày" lấy đúng N ngày (`t0 − N < DAY ≤ t0`).
 
-Training đọc feature từ **Feast feature store** bằng join point-in-time, trên các snapshot mà batch hoặc backfill đã ghi theo từng cutoff. Có test chứng minh feature đọc từ store trùng khớp từng giá trị với feature tính trực tiếp. Hai champion hiện tại được tạo ra trước khi có store, nhưng train lại qua store vẫn cho đúng kết quả cũ (ΔAUC = 0).
+**Khác với `multidomain_v1`** (champion trước 2026-11-26, 28 feature):
+- Bỏ `primary_store_id`: đây là mã cửa hàng nhưng bị đưa vào model như một con số, nên model có thể học thứ tự vô nghĩa giữa các mã.
+- Sửa biên cửa sổ: v1 dùng `DAY ≥ t0 − N`, nên cửa sổ "30 ngày" thực tế lấy 31 ngày.
+- Cả hai thay đổi lấy từ projectphase3. Code vẫn tính được v1, nên champion v1 trong history vẫn chấm điểm và rollback được.
+
+Training đọc feature từ **Feast feature store** bằng join point-in-time, trên các snapshot mà batch hoặc backfill đã ghi theo từng cutoff. Có test chứng minh feature đọc từ store trùng khớp từng giá trị với feature tính trực tiếp. Mỗi phiên bản feature có file lịch sử riêng (`household_features_<version>.parquet`).
 
 ## 2. Dữ liệu và cách chia
 
@@ -38,41 +43,49 @@ Training đọc feature từ **Feast feature store** bằng join point-in-time, 
   | val | 530, 560, 590 | Early stopping và chọn calibration |
   | test | 650, 680 | Đánh giá out-of-time, chạy gate, làm mốc tham chiếu cho drift |
 
-- **Số dòng (fit / val / test):** purchase 27.500 / 7.500 / 5.000; lapse 19.960 / 5.537 / 3.729.
-- **Base rate (fit / val / test):** purchase 0,676 / 0,691 / 0,701; lapse 0,112 / 0,096 / 0,106.
+- **Số dòng (fit / val / test):** purchase 27.500 / 7.500 / 5.000; lapse 19.830 / 5.506 / 3.699.
+- **Base rate (fit / val / test):** purchase 0,676 / 0,691 / 0,701; lapse 0,111 / 0,094 / 0,104.
 
 ## 3. Huấn luyện
 
-- **LightGBM:** `learning_rate` 0,03, `max_depth` 6, `num_leaves` 31, bagging 0,8, `colsample` 0,8, tối đa 1.000 cây, early stopping 50 vòng theo log loss trên tập val.
-  - Purchase dừng ở vòng 164, lapse ở vòng 120.
-- **Calibration:** chọn giữa không calibrate / Platt / Isotonic theo ECE cross-fit 5 fold trên tập val. Cả hai model đều chọn **Isotonic**:
-  - Purchase: ECE 0,0081 so với 0,0094 khi không calibrate.
-  - Lapse: ECE 0,0047 so với 0,0168.
-- **Tái lập:** `python -m scripts.reproduce_champion --target purchase|lapse` train lại từ repo rồi so với champion trên cùng các dòng test.
-  - Purchase: ΔAUC = −0,0003.
-  - Lapse: ΔAUC = 0,0000.
-  - Champion lapse được train khi working tree còn thay đổi chưa commit (git SHA `3a6912c-dirty`). Kết quả tái lập ở trên xác nhận code hiện tại cho ra cùng model.
+- **LightGBM:** `learning_rate` 0,03, `max_depth` 3, `num_leaves` 8, `min_child_samples` 400, bagging 0,7, `colsample` 0,95, tối đa 1.000 cây, early stopping 50 vòng theo log loss trên tập val.
+  - Bộ tham số cây nông này lấy từ projectphase3 (random search 30 cấu hình, kiểm lại bằng backtest 7 fold). Trước đây dùng `max_depth` 6, `num_leaves` 31.
+  - Purchase dừng ở vòng 289, lapse ở vòng 157.
+- **Calibration:** chọn giữa không calibrate / Platt / Isotonic theo ECE cross-fit 5 fold trên tập val:
+  - Purchase chọn **Isotonic**: ECE 0,0043, so với 0,0092 (Platt) và 0,0120 (không calibrate).
+  - Lapse chọn **Platt**: ECE 0,0046, so với 0,0074 (Isotonic) và 0,0188 (không calibrate).
+- **Tái lập:** `python -m scripts.reproduce_champion --target purchase|lapse` train lại theo đúng công thức ghi trong bundle (bộ feature, tham số) rồi so với champion trên cùng các dòng test. Cả hai: ΔAUC = 0,0000.
+  - Hai champion được train khi các thay đổi của v2 chưa được commit (git SHA `5ee576f-dirty`). Kết quả tái lập xác nhận code đã commit cho ra cùng model.
 
 ## 4. Kết quả trên tập test out-of-time
 
 | Chỉ số | purchase | lapse |
 |---|---|---|
-| ROC-AUC | **0,859** | **0,816** |
-| PR-AUC | 0,931 | 0,283 |
-| Brier skill score | 0,347 | 0,129 |
-| ECE | 0,019 | 0,010 |
-| Lift@10% | 1,42× (tối đa có thể đạt: 1,43×) | 3,02× (tối đa có thể đạt: 9,4×) |
-| Base rate | 0,701 | 0,106 |
+| ROC-AUC | **0,861** | **0,819** |
+| PR-AUC | 0,931 | 0,291 |
+| Brier skill score | 0,351 | 0,129 |
+| ECE | 0,015 | 0,010 |
+| Lift@10% | 1,41× (tối đa có thể đạt: 1,43×) | 3,03× (tối đa có thể đạt: 9,6×) |
+| Base rate | 0,701 | 0,104 |
+
+**So với champion v1 trên cùng các dòng test** (gate không-kém-hơn, bootstrap theo household):
+
+| | purchase | lapse |
+|---|---|---|
+| ΔAUC (v2 − v1) | +0,0013, CI95 [−0,0003; +0,0028] | +0,0020, CI95 [−0,0026; +0,0069] |
+| Brier skill score v1 → v2 | 0,347 → 0,351 | 0,128 → 0,129 |
+| ECE v1 → v2 | 0,019 → 0,015 | 0,009 → 0,010 |
+| Số dòng so sánh | 5.000 | 3.699 (hộ đủ điều kiện ở cả hai bộ feature) |
 
 Danh sách target theo từng mức năng lực chiến dịch: xem [analysis/TARGET_ANALYSIS.md](analysis/TARGET_ANALYSIS.md).
 
 **Feature quan trọng nhất** (theo tỷ trọng gain):
-- Purchase: `baskets_count_60d` 45%, `baskets_count_90d` 19%, `days_since_last_basket` 7%.
-- Lapse: `baskets_count_60d` 20%, `baskets_count_90d` 19%, `std_inter_trip` 12%.
+- Purchase: `baskets_count_60d` 33%, `baskets_count_90d` 25%, `baskets_count_30d` 8%.
+- Lapse: `baskets_count_90d` 32%, `baskets_count_60d` 16%, `std_inter_trip` 14%.
 
 **Feedback ngoài mẫu:** AUC thực tế đo ở cutoff có nhãn đã đủ ngày gần nhất.
-- Purchase ở cutoff 697: 0,857.
-- Lapse ở cutoff 690: 0,812.
+- Purchase ở cutoff 697: 0,859.
+- Lapse ở cutoff 690: 0,809.
 
 Cả hai đều nằm trong ngưỡng chấp nhận (giảm không quá 0,05 so với AUC lúc được chấp nhận).
 

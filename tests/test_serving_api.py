@@ -59,7 +59,7 @@ def test_health_reports_model_and_batch_view(client, with_batch):
     data = client.get("/health").json()
     assert data["status"] == "HEALTHY"
     assert data["model_target"] == "purchase" and data["horizon_days"] == 14
-    assert data["feature_count"] == 28
+    assert data["feature_count"] == len(scoring_service.predictor.features)
     assert data["batch_view"]["champion_households"] == len(BATCH)
 
 
@@ -145,7 +145,7 @@ def test_metrics_and_model_info(client, with_batch):
     metrics = client.get("/v1/metrics").json()
     assert metrics["cached_households"] == len(BATCH)
     info = client.get("/v1/models/champion").json()
-    assert info["target"] == "purchase" and info["feature_count"] == 28
+    assert info["target"] == "purchase" and info["feature_set_version"] == "multidomain_v2" and info["feature_count"] == 27
     reload_ = client.post("/v1/models/reload", headers=AUTH).json()
     assert reload_["status"] == "RELOADED"
 

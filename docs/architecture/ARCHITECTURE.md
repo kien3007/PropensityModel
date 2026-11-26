@@ -30,7 +30,7 @@ flowchart LR
 | Khối | Làm gì |
 |---|---|
 | Lakehouse | Nạp CSV, làm sạch theo các lớp Bronze → Silver → Gold, lưu điểm batch |
-| Feature store | Lưu lịch sử 28 feature của từng household theo mỗi ngày cutoff |
+| Feature store | Lưu lịch sử 27 feature của từng household theo mỗi ngày cutoff |
 | Training | Train LightGBM; chỉ promote nếu model mới qua governance gate |
 | Batch scoring | Mỗi tuần chấm điểm toàn bộ household rồi đẩy vào Redis |
 | Serving API | Trả đúng điểm batch của champion (có canary và cold start) |
@@ -40,7 +40,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A["Nạp dữ liệu mới<br/>Bronze → Silver → Gold"] --> B["Tính 28 feature<br/>tại ngày cutoff"]
+    A["Nạp dữ liệu mới<br/>Bronze → Silver → Gold"] --> B["Tính 27 feature<br/>tại ngày cutoff"]
     B --> C{"Kiểm tra<br/>chất lượng"}
     C -- "không đạt" --> X["Dừng batch<br/>giữ điểm tuần trước<br/>+ alert critical"]
     C -- "đạt" --> D["Ghi snapshot<br/>vào Feast"]

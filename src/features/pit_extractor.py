@@ -16,7 +16,9 @@ import pandas as pd
 
 from src.features.contract import (
     CATEGORICAL_FEATURES,
-    MODEL_FEATURES,
+    FEATURE_SET_VERSION,
+    WINDOW_INCLUDES_START_DAY,
+    features_for,
     normalize_feature_dtypes,
     validate_feature_frame,
 )
@@ -72,16 +74,24 @@ def compute_multidomain_features(
     redemptions: Optional[pd.DataFrame] = None,
     demographics: Optional[pd.DataFrame] = None,
     lookback_days: int = 180,
+    feature_set_version: str = FEATURE_SET_VERSION,
 ) -> pd.DataFrame:
     """
-    Computes the 28 multi-domain features (Recency/Timing, Frequency/Momentum, Monetary,
+    Computes the multi-domain features of `feature_set_version` (Recency/Timing, Frequency/Momentum, Monetary,
     Marketing, Store Loyalty, Demographics) for every household at `cutoff`.
 
     Pure function: no I/O. Strictly point-in-time: only rows with DAY <= cutoff are used.
     `baskets` comes from `PointInTimeFeatureExtractor.build_trip_level_baskets`;
     `campaigns` is campaign_table joined with campaign_desc (START_DAY / END_DAY).
     """
-    hist = baskets[(baskets["DAY"] <= cutoff) & (baskets["DAY"] >= cutoff - lookback_days)].copy()
+    model_features = features_for(feature_set_version)
+    inclusive = WINDOW_INCLUDES_START_DAY[feature_set_version]
+
+    def in_window(day: pd.Series, n: int) -> pd.Series:
+        """Rows of the last n days up to the cutoff (v1 kept the day cutoff - n as well)."""
+        return (day >= cutoff - n) if inclusive else (day > cutoff - n)
+
+    hist = baskets[(baskets["DAY"] <= cutoff) & in_window(baskets["DAY"], lookback_days)].copy()
     universe = list(households)
     feats = pd.DataFrame({"household_key": universe})
     feats["cutoff_day"] = cutoff
@@ -109,7 +119,7 @@ def compute_multidomain_features(
 
     # B. Frequency & Momentum
     for window in [14, 30, 60, 90, 180]:
-        sub = hist[hist["DAY"] >= cutoff - window]
+        sub = hist[in_window(hist["DAY"], window)]
         counts = sub.groupby("household_key")["BASKET_ID"].nunique().reset_index()
         counts.columns = ["household_key", f"baskets_count_{window}d"]
         feats = feats.merge(counts, on="household_key", how="left")
@@ -121,7 +131,7 @@ def compute_multidomain_features(
 
     # C. Monetary & Basket Architecture
     for window in [30, 90, 180]:
-        sub = hist[hist["DAY"] >= cutoff - window]
+        sub = hist[in_window(hist["DAY"], window)]
         spend = sub.groupby("household_key")["basket_spend"].sum().reset_index()
         spend.columns = ["household_key", f"spend_{window}d"]
         feats = feats.merge(spend, on="household_key", how="left")
@@ -129,7 +139,7 @@ def compute_multidomain_features(
 
     feats["aov_90d"] = feats["spend_90d"] / (feats["baskets_count_90d"] + 1e-5)
 
-    sub90 = hist[hist["DAY"] >= cutoff - 90]
+    sub90 = hist[in_window(hist["DAY"], 90)]
     if not sub90.empty:
         avg_items = sub90.groupby("household_key")["basket_items"].mean().reset_index()
         avg_items.columns = ["household_key", "avg_items_per_basket_90d"]
@@ -153,7 +163,7 @@ def compute_multidomain_features(
         feats["is_targeted_by_active_campaign"] = 0
 
     if redemptions is not None and not redemptions.empty and "DAY" in redemptions.columns:
-        hist_red = redemptions[(redemptions["DAY"] <= cutoff) & (redemptions["DAY"] >= cutoff - lookback_days)]
+        hist_red = redemptions[(redemptions["DAY"] <= cutoff) & in_window(redemptions["DAY"], lookback_days)]
         red_counts = hist_red.groupby("household_key")["DAY"].count().reset_index()
         red_counts.columns = ["household_key", "coupon_redemption_count_180d"]
         feats = feats.merge(red_counts, on="household_key", how="left")
@@ -190,9 +200,11 @@ def compute_multidomain_features(
     feats = normalize_feature_dtypes(feats)
 
     drop_cols = ["last_trip_day", "last_perish_day", "primary_store_spend"]
+    if "primary_store_id" not in model_features:
+        drop_cols.append("primary_store_id")
     feats = feats.drop(columns=[c for c in drop_cols if c in feats.columns])
 
-    validate_feature_frame(feats, MODEL_FEATURES)
+    validate_feature_frame(feats, model_features)
     return feats
 
 
@@ -204,10 +216,21 @@ class MultiDomainFeatureBuilder:
     (many cutoffs) and batch scoring (one cutoff) execute the identical code path.
     """
 
-    def __init__(self, data: "RawDataBundle", lookback_days: int = 180) -> None:
+    def __init__(self, data: "RawDataBundle", lookback_days: int = 180,
+                 feature_set_version: str = FEATURE_SET_VERSION) -> None:
         self.data = data
         self.lookback_days = lookback_days
+        self.feature_set_version = feature_set_version
+        self.features = features_for(feature_set_version)
         self._baskets: Optional[pd.DataFrame] = None
+
+    def for_version(self, feature_set_version: str) -> "MultiDomainFeatureBuilder":
+        """A builder for another feature set over the same data, sharing the basket table."""
+        if feature_set_version == self.feature_set_version:
+            return self
+        other = MultiDomainFeatureBuilder(self.data, self.lookback_days, feature_set_version)
+        other._baskets = self.baskets  # built once, shared
+        return other
 
     @property
     def baskets(self) -> pd.DataFrame:
@@ -231,6 +254,7 @@ class MultiDomainFeatureBuilder:
             redemptions=self.data.redemptions,
             demographics=self.data.demographics,
             lookback_days=self.lookback_days,
+            feature_set_version=self.feature_set_version,
         )
 
     def labels_at(self, cutoff: int, horizon_days: int) -> pd.DataFrame:

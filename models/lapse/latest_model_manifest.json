@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
-  "bundle_name": "lgbm_lapse_multidomain_v1_h21_20261123_111333_402173",
-  "created_at": "20261123_111333_402173",
+  "bundle_name": "lgbm_lapse_multidomain_v2_h21_20261126_113618_388050",
+  "created_at": "20261126_113618_388050",
   "target": "lapse",
-  "feature_set_version": "multidomain_v1",
+  "feature_set_version": "multidomain_v2",
   "features": [
     "days_since_last_basket",
     "days_since_last_perishable",
@@ -24,7 +24,6 @@
     "perishable_basket_ratio_90d",
     "is_targeted_by_active_campaign",
     "coupon_redemption_count_180d",
-    "primary_store_id",
     "store_loyalty_index",
     "classification_1",
     "classification_2",
@@ -67,72 +66,72 @@
     650,
     680
   ],
-  "calibration_method": "isotonic",
+  "calibration_method": "platt",
   "calibration_report": {
     "none": {
-      "cv_ece": 0.016751
+      "cv_ece": 0.018781
     },
     "platt": {
-      "cv_ece": 0.007534
+      "cv_ece": 0.004611
     },
     "isotonic": {
-      "cv_ece": 0.004745
+      "cv_ece": 0.007446
     }
   },
-  "best_iteration": 120,
+  "best_iteration": 157,
   "lgbm_params": {
     "objective": "binary",
     "n_estimators": 1000,
     "learning_rate": 0.03,
-    "max_depth": 6,
-    "num_leaves": 31,
-    "min_child_samples": 20,
-    "subsample": 0.8,
+    "max_depth": 3,
+    "num_leaves": 8,
+    "min_child_samples": 400,
+    "subsample": 0.7,
     "subsample_freq": 1,
-    "colsample_bytree": 0.8,
+    "colsample_bytree": 0.95,
     "random_state": 42,
     "n_jobs": -1,
     "verbosity": -1
   },
   "metrics": {
-    "roc_auc": 0.816083,
-    "pr_auc": 0.282504,
-    "brier_score": 0.082477,
-    "log_loss": 0.274629,
-    "ece": 0.010354,
-    "base_rate": 0.1059,
-    "top_10_precision": 0.3199,
-    "lift_at_10pct": 3.0199,
-    "max_attainable_lift_10": 9.4405,
-    "sample_size": 3729,
-    "top_decile_lift": 3.0199,
-    "brier_skill_score": 0.129127,
-    "normalized_lift_10": 0.239316,
-    "pr_auc_gain": 0.197498
+    "roc_auc": 0.818565,
+    "pr_auc": 0.290813,
+    "brier_score": 0.081051,
+    "log_loss": 0.2684,
+    "ece": 0.009914,
+    "base_rate": 0.1038,
+    "top_10_precision": 0.3144,
+    "lift_at_10pct": 3.0282,
+    "max_attainable_lift_10": 9.6328,
+    "sample_size": 3699,
+    "top_decile_lift": 3.0282,
+    "brier_skill_score": 0.128811,
+    "normalized_lift_10": 0.234941,
+    "pr_auc_gain": 0.208663
   },
   "val_metrics": {
-    "roc_auc": 0.82794,
-    "pr_auc": 0.275614,
-    "brier_score": 0.076025,
-    "log_loss": 0.252424,
-    "ece": 0.016751,
-    "base_rate": 0.0959,
-    "top_10_precision": 0.3092,
-    "lift_at_10pct": 3.2244,
-    "max_attainable_lift_10": 10.4275,
-    "sample_size": 5537,
-    "top_decile_lift": 3.2244,
-    "brier_skill_score": 0.12316,
-    "normalized_lift_10": 0.23595,
-    "pr_auc_gain": 0.198776
+    "roc_auc": 0.830808,
+    "pr_auc": 0.288747,
+    "brier_score": 0.074071,
+    "log_loss": 0.247684,
+    "ece": 0.018781,
+    "base_rate": 0.0935,
+    "top_10_precision": 0.3182,
+    "lift_at_10pct": 3.4018,
+    "max_attainable_lift_10": 10.6913,
+    "sample_size": 5506,
+    "top_decile_lift": 3.4018,
+    "brier_skill_score": 0.126373,
+    "normalized_lift_10": 0.247827,
+    "pr_auc_gain": 0.215356
   },
   "data_fingerprint": "385c047b9baa0a81",
-  "git_sha": "3a6912c-dirty",
+  "git_sha": "5ee576f-dirty",
   "lightgbm_version": "4.7.0",
   "sklearn_version": "1.7.2",
-  "version": "20261123_111333_402173",
-  "activated_at": "2026-11-23T11:13:33",
+  "version": "20261126_113618_388050",
+  "activated_at": "2026-11-26T11:36:22",
   "activation_event": "promote",
   "activation_reason": "governance gate passed",
-  "archive_path": "C:\\Users\\kienn\\PropensityVSF\\models\\lapse\\history\\champion_model_20261123_111333_402173.joblib"
+  "archive_path": "C:\\Users\\kienn\\PropensityVSF\\models\\lapse\\history\\champion_model_20261126_113618_388050.joblib"
 }

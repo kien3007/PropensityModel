@@ -12,10 +12,12 @@ from typing import Dict, List, Sequence
 import numpy as np
 import pandas as pd
 
-FEATURE_SET_VERSION = "multidomain_v1"
+# Current feature set. Older sets stay computable so that champions trained on them can still
+# be scored, compared and rolled back to (see FEATURE_SETS / WINDOW_INCLUDES_START_DAY).
+FEATURE_SET_VERSION = "multidomain_v2"
 
-# Champion 28 multi-domain features (order matters: it is the model's column order).
-MODEL_FEATURES: List[str] = [
+# multidomain_v1: the original 28 features (order matters: it is the model's column order).
+FEATURES_V1: List[str] = [
     "days_since_last_basket",
     "days_since_last_perishable",
     "median_inter_trip",
@@ -46,6 +48,10 @@ MODEL_FEATURES: List[str] = [
     "KID_CATEGORY_DESC",
 ]
 
+# multidomain_v2: v1 without primary_store_id (a store code used as a number has no meaningful
+# order), computed with exact N-day windows (see WINDOW_INCLUDES_START_DAY).
+MODEL_FEATURES: List[str] = [f for f in FEATURES_V1 if f != "primary_store_id"]
+
 CATEGORICAL_FEATURES: List[str] = [
     "classification_1",
     "classification_2",
@@ -60,7 +66,22 @@ NUMERIC_FEATURES: List[str] = [f for f in MODEL_FEATURES if f not in CATEGORICAL
 
 CATEGORICAL_FILL_VALUE = "UNKNOWN"
 
-FEATURE_SETS: Dict[str, List[str]] = {FEATURE_SET_VERSION: MODEL_FEATURES}
+FEATURE_SETS: Dict[str, List[str]] = {"multidomain_v1": FEATURES_V1, "multidomain_v2": MODEL_FEATURES}
+
+# Window convention per feature set. v1 selected `DAY >= cutoff - N`, so an "N-day" window held
+# N + 1 days; v2 selects `DAY > cutoff - N`, exactly N days (cutoff - N + 1 .. cutoff).
+WINDOW_INCLUDES_START_DAY: Dict[str, bool] = {"multidomain_v1": True, "multidomain_v2": False}
+
+# Every numeric column any supported feature set uses (dtype normalisation).
+_ALL_NUMERIC: List[str] = sorted({f for fs in FEATURE_SETS.values() for f in fs if f not in CATEGORICAL_FEATURES})
+
+
+def features_for(version: str) -> List[str]:
+    """Ordered feature list of a supported feature set."""
+    try:
+        return FEATURE_SETS[version]
+    except KeyError:
+        raise FeatureContractError(f"Unknown feature set '{version}'; supported: {sorted(FEATURE_SETS)}") from None
 
 
 class FeatureContractError(ValueError):
@@ -104,7 +125,7 @@ def normalize_feature_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     store schema. Values are unchanged (LightGBM reads numerics as float anyway).
     """
     out = apply_categorical_dtypes(df)
-    for col in NUMERIC_FEATURES:
+    for col in _ALL_NUMERIC:
         if col in out.columns:
             out[col] = out[col].astype("float64")
     return out

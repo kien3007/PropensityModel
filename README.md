@@ -8,8 +8,8 @@ End-to-end ML platform for household-level propensity scoring on Dunnhumby *"The
 
 | Model | Question | OOT ROC-AUC | Lift@10% | Registry |
 |---|---|---|---|---|
-| `purchase` | ≥ 1 basket in the next 14 days (all households) | 0.859 | 1.42× (max 1.43×) | `models/` |
-| `lapse` | regular shopper buys nothing in the next 21 days | 0.816 | 3.02× (max 9.4×) | `models/lapse/` |
+| `purchase` | ≥ 1 basket in the next 14 days (all households) | 0.861 | 1.41× (max 1.43×) | `models/` |
+| `lapse` | regular shopper buys nothing in the next 21 days | 0.819 | 3.03× (max 9.6×) | `models/lapse/` |
 
 - Both champions are **reproducible from this repo** (`python -m scripts.reproduce_champion`).
 - Promotion requires a **governance gate**: base-rate-relative quality checks plus non-inferiority versus the active champion.
@@ -37,7 +37,7 @@ flowchart TD
     subgraph Batch["Batch layer"]
         Bronze["DuckDB Lakehouse - Bronze Parquet"]
         Loader["DataLoader -> RawDataBundle"]
-        Features["MultiDomainFeatureBuilder<br/>28 point-in-time features (DAY <= t0)"]
+        Features["MultiDomainFeatureBuilder<br/>27 point-in-time features (DAY <= t0)"]
         FS["Feast feature store<br/>offline snapshot history"]
         Train["Train pipeline<br/>LightGBM + calibration + governance gate"]
         Registry["Model registry<br/>champion / history / rollback"]
@@ -80,6 +80,10 @@ Design rules that hold everywhere:
   offline history. Training reads features back through
   point-in-time joins, and cutoffs that were never snapshotted are backfilled once. Reads from the
   store are tested to equal recomputation. See [section 4.1](#41-feature-store).
+- **Versioned feature sets:** `multidomain_v2` (27 features, exact N-day windows) is current;
+  `multidomain_v1` (28 features, the previous champions) is still computed for any model trained on it.
+  Batch scoring, drift, feedback and the champion comparison all build features for each model's own set,
+  so a v1 champion can be compared against a v2 challenger on the same test rows and rolled back to.
 - **One model definition** ([src/config/model_config.py](src/config/model_config.py)): target, horizon, temporal splits, hyper-parameters and gate. Every pipeline, DAG and the scheduler read it.
 - **Self-describing bundles (schema v2):** target, feature set, horizon, cutoffs, data fingerprint and git SHA. The predictor refuses bundles that do not match the contract.
 
@@ -158,7 +162,7 @@ uvicorn src.serving.api:app --port 8000
 
 | Job | Schedule | Entry point | What it does |
 |---|---|---|---|
-| Weekly batch | Mon 02:00 UTC | `src.pipelines.batch_pipeline` | Bronze ingest, 28 PIT features (snapshot written to the feature store), score purchase (+ challenger) and lapse, Gold + Redis batch views, CRM / retention exports, drift audit (retrain if CRITICAL) |
+| Weekly batch | Mon 02:00 UTC | `src.pipelines.batch_pipeline` | Bronze ingest, 27 PIT features (snapshot written to the feature store), score purchase (+ challenger) and lapse, Gold + Redis batch views, CRM / retention exports, drift audit (retrain if CRITICAL) |
 | Monthly retraining | 1st of month 03:00 UTC | `src.pipelines.train_pipeline` (both targets) | Train, calibrate, evaluate OOT, governance gate, atomic promotion, serving hot-reload |
 | Daily data quality | 01:00 UTC | `LakehouseEngine.run_data_quality_framework` | Row counts, negative values, household coverage |
 | Weekly feedback | Wed 04:00 UTC | `GroundTruthFeedbackLoop` | Realized AUC per target on the latest matured cutoff, retrain if degraded |
@@ -168,9 +172,9 @@ uvicorn src.serving.api:app --port 8000
 | | |
 |---|---|
 | Location | `FEATURE_STORE_DIR` (default `data/feature_store`; in docker `/app/data/lakehouse/feature_store`) |
-| Offline | `offline/household_features.parquet`: one snapshot per cutoff, appended atomically (re-writing a cutoff replaces it) |
+| Offline | `offline/household_features_<feature set>.parquet`: one snapshot per cutoff, appended atomically (re-writing a cutoff replaces it). One history per feature set |
 | Online | None. Serving uses precomputed batch scores in Redis, not live features |
-| Schema | Generated from the feature contract: 21 `Float64` + 7 `String`. View `household_features_multidomain_v1`, entity `household_key` |
+| Schema | Generated from the feature contract: 20 `Float64` + 7 `String`. View `household_features_multidomain_v2`, entity `household_key` |
 | Timeline | `DAY d` -> `2026-01-01 + d days` (UTC); TTL = `FEATURE_TTL_DAYS` (7). A read more than 7 days after the last snapshot fails instead of returning stale values |
 | Registry | Applied from code (`FeatureStoreClient.apply()`); no `feast apply` step |
 | Quality gate | `src/features/quality.py`, run before a snapshot is stored or scored: value ranges, known categories, window consistency (14d <= 30d <= ... counts and spends), one row per household, no loss of > 10% of households and no zero-share jump > 25 points vs the previous snapshot. A failing snapshot is not written and the batch stops (even without `STRICT_INFRA`). Switch: `FEATURE_QUALITY_CHECKS` |

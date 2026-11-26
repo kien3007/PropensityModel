@@ -31,7 +31,7 @@ Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc tro
 ## 1b. Feature store (Feast)
 
 - **Vị trí:** `FEATURE_STORE_DIR`; trong docker là `/app/data/lakehouse/feature_store`, nằm trong volume `lakehouse_data`.
-  - Kho lịch sử (offline): `offline/household_features.parquet`, mỗi cutoff một snapshot.
+  - Kho lịch sử (offline): `offline/household_features_<bộ feature>.parquet`, mỗi cutoff một snapshot. Mỗi bộ feature (`multidomain_v1`, `multidomain_v2`) có file riêng; batch ghi vào file của bộ hiện tại (`multidomain_v2`).
   - Không có online store: serving dùng điểm batch tính sẵn trong Redis, không đọc feature trực tiếp.
   - Registry: `registry.db`, được đăng ký tự động từ code.
 - **Batch** mỗi lần chạy ghi thêm snapshot của cutoff đó. Training mặc định (`TRAINING_FEATURE_SOURCE=feast`) đọc feature bằng join point-in-time. Cutoff nào chưa có snapshot thì được tính và ghi bổ sung một lần.
@@ -42,7 +42,7 @@ Mọi lệnh `python -m ...` bên dưới chạy được trên máy, hoặc tro
 - **Khi sửa cách tính feature** (logic trong `pit_extractor.py`):
   - Ghi đè lịch sử bằng `python -m scripts.feature_store backfill --training --overwrite`, hoặc xoá thư mục rồi backfill lại.
   - Sau đó chạy `scripts.reproduce_champion`.
-  - Nếu đổi danh sách feature thì phải tăng `FEATURE_SET_VERSION`; tên feature view sẽ đổi theo.
+  - Nếu đổi danh sách feature hoặc cách tính thì phải thêm một bộ feature mới trong `contract.py` (ví dụ `multidomain_v3`) và giữ bộ cũ, để champion đang chạy vẫn chấm điểm và rollback được. Feature view và file lịch sử mới được tạo theo tên bộ feature. Sau đó backfill bộ mới (`backfill --training`) rồi train lại. Gate so sánh champion cũ (tính bằng bộ feature cũ) với model mới trên cùng các dòng test.
 - **Lỗi `FeatureQualityError`** nghĩa là snapshot không qua bước kiểm tra chất lượng. Khi đó snapshot không được ghi vào store và batch dừng, không chấm điểm cũng không publish; điểm của lần chạy trước vẫn được giữ nguyên. Cách xử lý:
   - Đọc danh sách vi phạm trong log. Ví dụ: giá trị âm, category lạ, số household giảm quá 10%, tỷ lệ giá trị 0 của một feature thay đổi quá 25 điểm %.
   - Kiểm tra dữ liệu nguồn (Bronze, Silver) trước khi sửa code.
